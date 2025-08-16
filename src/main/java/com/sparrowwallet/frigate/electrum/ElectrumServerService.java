@@ -7,10 +7,10 @@ import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcParam;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcService;
 import com.sparrowwallet.drongo.Version;
 import com.sparrowwallet.frigate.Frigate;
-import com.sparrowwallet.frigate.index.BitcoindClient;
-import com.sparrowwallet.frigate.index.BlockStats;
-import com.sparrowwallet.frigate.index.FeeInfo;
-import com.sparrowwallet.frigate.index.MempoolInfo;
+import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
+import com.sparrowwallet.frigate.bitcoind.BlockStats;
+import com.sparrowwallet.frigate.bitcoind.FeeInfo;
+import com.sparrowwallet.frigate.bitcoind.MempoolInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -5,7 +5,7 @@ import com.google.common.eventbus.EventBus;
 import com.sparrowwallet.drongo.Drongo;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.electrum.ElectrumServerRunnable;
-import com.sparrowwallet.frigate.index.BitcoindClient;
+import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.io.Storage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

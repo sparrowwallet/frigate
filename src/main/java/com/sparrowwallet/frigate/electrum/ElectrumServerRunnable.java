@@ -1,6 +1,6 @@
 package com.sparrowwallet.frigate.electrum;
 
-import com.sparrowwallet.frigate.index.BitcoindClient;
+import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

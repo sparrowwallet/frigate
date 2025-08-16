@@ -1,9 +1,13 @@
-package com.sparrowwallet.frigate.index;
+package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
+import com.sparrowwallet.drongo.Utils;
+import com.sparrowwallet.drongo.protocol.Block;
+import com.sparrowwallet.drongo.protocol.Transaction;
 import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumBlockHeader;
+import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.CoreAuthType;
 import org.slf4j.Logger;
@@ -19,6 +23,7 @@ public class BitcoindClient {
 
     private final JsonRpcClient jsonRpcClient;
     private final Timer timer = new Timer(false);
+    private final Index index = new Index();
 
     private NetworkInfo networkInfo;
     private String lastBlock;
@@ -29,6 +34,8 @@ public class BitcoindClient {
     private final Lock syncingLock = new ReentrantLock();
     private final Condition syncingCondition = syncingLock.newCondition();
     private boolean syncing;
+
+    private final Lock indexingLock = new ReentrantLock();
 
     private boolean stopped;
 
@@ -79,6 +86,24 @@ public class BitcoindClient {
         }
 
         lastBlock = blockchainInfo.bestblockhash();
+        updateIndex();
+    }
+
+    private void updateIndex() {
+        if(indexingLock.tryLock()) {
+            try {
+                for(int i = index.getLastBlockIndexed() + 1; i <= tip.height(); i++) {
+                    String blockHash = getBitcoindService().getBlockHash(i);
+                    String blockHex = (String)getBitcoindService().getBlock(blockHash, 0);
+                    Block block = new Block(Utils.hexToBytes(blockHex));
+                    for(Transaction transaction : block.getTransactions()) {
+                        index.addToIndex(i, transaction);
+                    }
+                }
+            } finally {
+                indexingLock.unlock();
+            }
+        }
     }
 
     public void stop() {
@@ -137,6 +162,7 @@ public class BitcoindClient {
                     tip = blockHeader.getBlockHeader();
                     log.warn("New block height " + tip.height());
                     Frigate.getEventBus().post(tip);
+                    updateIndex();
                 }
 
                 lastBlock = blockchainInfo.bestblockhash();

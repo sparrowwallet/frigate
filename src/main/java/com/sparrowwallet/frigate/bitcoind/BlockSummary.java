@@ -1,4 +1,4 @@
-package com.sparrowwallet.frigate.index;
+package com.sparrowwallet.frigate.bitcoind;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;

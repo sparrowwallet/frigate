@@ -1,4 +1,4 @@
-package com.sparrowwallet.frigate.index;
+package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.JsonRpcParams;
 import com.github.arteam.simplejsonrpc.client.ParamsType;
@@ -8,7 +8,6 @@ import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcParam;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcService;
 import com.sparrowwallet.drongo.protocol.Sha256Hash;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,6 +46,9 @@ public interface BitcoindClientService {
 
     @JsonRpcMethod("getblockstats")
     BlockStats getBlockStats(@JsonRpcParam("blockhash") int hash_or_height);
+
+    @JsonRpcMethod("getblock")
+    Object getBlock(@JsonRpcParam("blockhash") String blockhash, @JsonRpcOptional @JsonRpcParam("verbosity") int verbosity);
 
     @JsonRpcMethod("getrawtransaction")
     Object getRawTransaction(@JsonRpcParam("txid") String txid, @JsonRpcParam("verbose") boolean verbose);

@@ -1,4 +1,4 @@
-package com.sparrowwallet.frigate.index;
+package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.sparrowwallet.drongo.Network;

@@ -4,7 +4,7 @@ import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.eventbus.Subscribe;
 import com.sparrowwallet.frigate.Frigate;
-import com.sparrowwallet.frigate.index.BitcoindClient;
+import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

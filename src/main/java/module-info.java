@@ -10,6 +10,7 @@ module com.sparrowwallet.frigate {
     requires org.slf4j;
     exports com.sparrowwallet.frigate;
     exports com.sparrowwallet.frigate.io;
-    exports com.sparrowwallet.frigate.index;
+    exports com.sparrowwallet.frigate.bitcoind;
+    exports com.sparrowwallet.frigate.electrum;
     opens com.sparrowwallet.frigate.io;
 }
