@@ -67,7 +67,7 @@ public class Index {
             PreparedStatement statement = connection.prepareStatement("SELECT MAX(height) from " + TWEAK_TABLE);
             ResultSet resultSet = statement.executeQuery();
             if(resultSet.next()) {
-                lastBlockIndexed = resultSet.getInt(1);
+                lastBlockIndexed = Math.max(lastBlockIndexed, resultSet.getInt(1));
             }
         } catch(SQLException e) {
             log.error("Error getting last block indexed", e);
