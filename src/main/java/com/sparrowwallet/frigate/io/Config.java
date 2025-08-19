@@ -16,6 +16,7 @@ public class Config {
     private CoreAuthType coreAuthType;
     private File coreDataDir;
     private String coreAuth;
+    private int indexStartHeight;
 
     private static Config INSTANCE;
 
@@ -94,6 +95,15 @@ public class Config {
 
     public void setCoreAuth(String coreAuth) {
         this.coreAuth = coreAuth;
+        flush();
+    }
+
+    public int getIndexStartHeight() {
+        return indexStartHeight;
+    }
+
+    public void setIndexStartHeight(int indexStartHeight) {
+        this.indexStartHeight = indexStartHeight;
         flush();
     }
 

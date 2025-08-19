@@ -84,21 +84,15 @@ public class BitcoindTransport implements Transport {
         InputStream inputStream = connection.getErrorStream() == null ? connection.getInputStream() : connection.getErrorStream();
 
         StringBuilder res = new StringBuilder();
-        try(InputStreamReader isr = new InputStreamReader(inputStream, StandardCharsets.UTF_8)) {
-            char[] buffer = new char[8192];
-            int charsRead;
-            StringBuilder response = new StringBuilder();
+        try(BufferedReader br = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            String responseLine;
+            while((responseLine = br.readLine()) != null) {
+                if(statusCode == 500) {
+                    responseLine = responseLine.replace("\"result\":null,", "");
+                }
 
-            while((charsRead = isr.read(buffer)) != -1) {
-                response.append(buffer, 0, charsRead);
+                res.append(responseLine.trim());
             }
-
-            String responseContent = response.toString();
-            if(statusCode == 500) {
-                responseContent = responseContent.replace("\"result\":null,", "");
-            }
-
-            res.append(responseContent.trim());
         }
 
         String response = res.toString();

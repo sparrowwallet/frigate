@@ -7,6 +7,7 @@ import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.drongo.wallet.BlockTransaction;
 import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.ScriptHashTx;
+import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Storage;
 import org.duckdb.DuckDBConnection;
 import org.slf4j.Logger;
@@ -27,9 +28,14 @@ public class Index {
     private DuckDBConnection connection;
 
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
-    private int lastBlockIndexed = (Network.get() == Network.MAINNET ? MAINNET_TAPROOT_ACTIVATION_HEIGHT - 1 : -1);
+    private int lastBlockIndexed = -1;
 
     public void initialize() {
+        if(Network.get() == Network.MAINNET) {
+            lastBlockIndexed = Math.max(lastBlockIndexed, MAINNET_TAPROOT_ACTIVATION_HEIGHT - 1);
+        }
+        lastBlockIndexed = Math.max(lastBlockIndexed, Config.get().getIndexStartHeight());
+
         try {
             Properties prop = new Properties();
             prop.setProperty("allow_unsigned_extensions", "true");
