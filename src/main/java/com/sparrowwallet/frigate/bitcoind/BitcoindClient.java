@@ -2,8 +2,9 @@ package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
 import com.sparrowwallet.drongo.Utils;
-import com.sparrowwallet.drongo.protocol.Block;
-import com.sparrowwallet.drongo.protocol.Transaction;
+import com.sparrowwallet.drongo.protocol.*;
+import com.sparrowwallet.drongo.silentpayments.SilentPaymentUtils;
+import com.sparrowwallet.drongo.wallet.BlockTransaction;
 import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumBlockHeader;
@@ -23,7 +24,7 @@ public class BitcoindClient {
 
     private final JsonRpcClient jsonRpcClient;
     private final Timer timer = new Timer(false);
-    private final Index index = new Index();
+    private final Index index;
 
     private NetworkInfo networkInfo;
     private String lastBlock;
@@ -39,7 +40,9 @@ public class BitcoindClient {
 
     private boolean stopped;
 
-    public BitcoindClient() {
+    private final Map<Sha256Hash, Transaction> txCache = lruCache(10000);
+
+    public BitcoindClient(Index index) {
         BitcoindTransport bitcoindTransport;
 
         Config config = Config.get();
@@ -52,6 +55,7 @@ public class BitcoindClient {
         }
 
         this.jsonRpcClient = new JsonRpcClient(bitcoindTransport);
+        this.index = index;
     }
 
     public void initialize() {
@@ -96,8 +100,29 @@ public class BitcoindClient {
                     String blockHash = getBitcoindService().getBlockHash(i);
                     String blockHex = (String)getBitcoindService().getBlock(blockHash, 0);
                     Block block = new Block(Utils.hexToBytes(blockHex));
-                    for(Transaction transaction : block.getTransactions()) {
-                        index.addToIndex(i, transaction);
+
+                    Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+                    Map<HashIndex, TransactionOutput> spentOutputs = new HashMap<>();
+                    for(Transaction tx : block.getTransactions()) {
+                        txCache.put(tx.getTxId(), tx);
+
+                        if(!tx.isCoinBase() && SilentPaymentUtils.containsTaprootOutput(tx)) {
+                            for(TransactionInput txInput : tx.getInputs()) {
+                                HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
+                                Transaction spentTx = getTransaction(hashIndex.getHash());
+                                spentOutputs.put(hashIndex, spentTx.getOutputs().get((int)hashIndex.getIndex()));
+                            }
+
+                            byte[] tweak = SilentPaymentUtils.getTweak(tx, spentOutputs);
+                            if(tweak != null) {
+                                BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), i, block.getBlockHeader().getTimeAsDate(), 0L, tx, block.getHash());
+                                eligibleTransactions.put(blkTx, tweak);
+                            }
+                        }
+                    }
+
+                    if(!eligibleTransactions.isEmpty()) {
+                        index.addToIndex(eligibleTransactions);
                     }
                 }
             } finally {
@@ -121,6 +146,17 @@ public class BitcoindClient {
 
     public ElectrumBlockHeader getTip() {
         return tip;
+    }
+
+    private Transaction getTransaction(Sha256Hash txid) {
+        Transaction tx = txCache.get(txid);
+        if(tx == null) {
+            String txHex = (String)getBitcoindService().getRawTransaction(txid.toString(), false);
+            tx = new Transaction(Utils.hexToBytes(txHex));
+            txCache.put(txid, tx);
+        }
+
+        return tx;
     }
 
     private class PollTask extends TimerTask {
@@ -149,7 +185,7 @@ public class BitcoindClient {
                 if(lastBlock != null && tip != null) {
                     String blockhash = getBitcoindService().getBlockHash(tip.height());
                     if(!lastBlock.equals(blockhash)) {
-                        log.warn("Reorg detected, block height " + tip.height() + " was " + lastBlock + " and now is " + blockhash);
+                        log.info("Reorg detected, block height " + tip.height() + " was " + lastBlock + " and now is " + blockhash);
                         lastBlock = null;
                     }
                 }
@@ -160,7 +196,7 @@ public class BitcoindClient {
                 if(currentBlock == null || !currentBlock.equals(blockchainInfo.bestblockhash())) {
                     VerboseBlockHeader blockHeader = getBitcoindService().getBlockHeader(blockchainInfo.bestblockhash());
                     tip = blockHeader.getBlockHeader();
-                    log.warn("New block height " + tip.height());
+                    log.info("New block height " + tip.height());
                     Frigate.getEventBus().post(tip);
                     updateIndex();
                 }
@@ -184,5 +220,14 @@ public class BitcoindClient {
 
     private boolean isEmptyBlockchain(BlockchainInfo blockchainInfo) {
         return blockchainInfo.blocks() == 0 && blockchainInfo.getProgressPercent() == 100;
+    }
+
+    public static <K,V> Map<K,V> lruCache(final int maxSize) {
+        return new LinkedHashMap<K, V>(maxSize*4/3, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+                return size() > maxSize;
+            }
+        };
     }
 }

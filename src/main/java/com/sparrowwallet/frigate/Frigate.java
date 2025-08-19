@@ -6,6 +6,7 @@ import com.sparrowwallet.drongo.Drongo;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.electrum.ElectrumServerRunnable;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
+import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.io.Storage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,13 +22,19 @@ public class Frigate {
 
     private static final EventBus EVENT_BUS = new EventBus();
 
+    private Index index;
     private BitcoindClient bitcoindClient;
     private ElectrumServerRunnable electrumServer;
 
     private boolean running;
 
     public void start() {
-        bitcoindClient = new BitcoindClient();
+        Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
+
+        index = new Index();
+        index.initialize();
+
+        bitcoindClient = new BitcoindClient(index);
         bitcoindClient.initialize();
 
         electrumServer = new ElectrumServerRunnable(bitcoindClient);
@@ -43,6 +50,9 @@ public class Frigate {
     }
 
     public void stop() {
+        if(index != null) {
+            index.close();
+        }
         if(bitcoindClient != null) {
             bitcoindClient.stop();
         }

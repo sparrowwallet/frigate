@@ -8,8 +8,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.EnumSet;
@@ -20,6 +22,45 @@ public class Storage {
 
     public static final String FRIGATE_DIR = ".frigate";
     public static final String WINDOWS_FRIGATE_DIR = "Frigate";
+
+    public static File getSecp256k1ExtensionFile() {
+        String resourcePath;
+        String osName = System.getProperty("os.name");
+        String osArch = System.getProperty("os.arch");
+        if(osName.startsWith("Mac") && osArch.equals("aarch64")) {
+            resourcePath = "/native/macos/arm64/secp256k1.duckdb_extension";
+        } else if(osName.startsWith("Mac")) {
+            resourcePath = "/native/macos/amd64/secp256k1.duckdb_extension";
+        } else if(osName.startsWith("Windows")) {
+            resourcePath = "/native/windows/amd64/secp256k1.duckdb_extension";
+        } else if(osArch.equals("aarch64")) {
+            resourcePath = "/native/linux/arm64/secp256k1.duckdb_extension";
+        } else {
+            resourcePath = "/native/linux/amd64/secp256k1.duckdb_extension";
+        }
+
+        File extensionFile = new File(getFrigateDbDir(), "secp256k1.duckdb_extension");
+
+        try(InputStream is = Storage.class.getResourceAsStream(resourcePath)) {
+            if(is == null) {
+                throw new IOException("Could not find secp256k1 extension for the current platform: " + osName + " " + osArch);
+            }
+
+            Files.copy(is, extensionFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        } catch(IOException e) {
+            log.error("Error loading secp256k1 extension", e);
+        }
+
+        return extensionFile;
+    }
+
+    public static File getFrigateDbDir() {
+        File dbDir = new File(getFrigateDir(), "db");
+        if(!dbDir.exists()) {
+            createOwnerOnlyDirectory(dbDir);
+        }
+        return dbDir;
+    }
 
     public static File getFrigateDir() {
         File frigateDir;
