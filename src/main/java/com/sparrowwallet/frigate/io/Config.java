@@ -16,7 +16,8 @@ public class Config {
     private CoreAuthType coreAuthType;
     private File coreDataDir;
     private String coreAuth;
-    private int indexStartHeight;
+    private Integer indexStartHeight;
+    private Integer scriptPubKeyCacheSize;
 
     private static Config INSTANCE;
 
@@ -98,12 +99,21 @@ public class Config {
         flush();
     }
 
-    public int getIndexStartHeight() {
+    public Integer getIndexStartHeight() {
         return indexStartHeight;
     }
 
-    public void setIndexStartHeight(int indexStartHeight) {
+    public void setIndexStartHeight(Integer indexStartHeight) {
         this.indexStartHeight = indexStartHeight;
+        flush();
+    }
+
+    public Integer getScriptPubKeyCacheSize() {
+        return scriptPubKeyCacheSize;
+    }
+
+    public void setScriptPubKeyCacheSize(Integer scriptPubKeyCacheSize) {
+        this.scriptPubKeyCacheSize = scriptPubKeyCacheSize;
         flush();
     }
 

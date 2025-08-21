@@ -28,13 +28,16 @@ public class Index {
     private DuckDBConnection connection;
 
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
+    private static final int TESTNET_TAPROOT_ACTIVATION_HEIGHT = 0;
     private int lastBlockIndexed = -1;
 
     public void initialize() {
-        if(Network.get() == Network.MAINNET) {
-            lastBlockIndexed = Math.max(lastBlockIndexed, MAINNET_TAPROOT_ACTIVATION_HEIGHT - 1);
+        Integer startHeight = Config.get().getIndexStartHeight();
+        if(startHeight == null) {
+            startHeight = Network.get() == Network.MAINNET ? MAINNET_TAPROOT_ACTIVATION_HEIGHT : TESTNET_TAPROOT_ACTIVATION_HEIGHT;
+            Config.get().setIndexStartHeight(startHeight);
         }
-        lastBlockIndexed = Math.max(lastBlockIndexed, Config.get().getIndexStartHeight());
+        lastBlockIndexed = Math.max(lastBlockIndexed, startHeight - 1);
 
         try {
             Properties prop = new Properties();

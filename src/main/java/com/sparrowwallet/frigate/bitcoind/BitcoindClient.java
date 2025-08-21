@@ -1,19 +1,22 @@
 package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
+import com.sparrowwallet.drongo.Network;
+import com.sparrowwallet.drongo.OsType;
 import com.sparrowwallet.drongo.Utils;
 import com.sparrowwallet.drongo.protocol.*;
 import com.sparrowwallet.drongo.silentpayments.SilentPaymentUtils;
 import com.sparrowwallet.drongo.wallet.BlockTransaction;
-import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumBlockHeader;
 import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.CoreAuthType;
+import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
 import java.util.*;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -21,6 +24,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class BitcoindClient {
     private static final Logger log = LoggerFactory.getLogger(BitcoindClient.class);
+
+    public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 1000000;
 
     private final JsonRpcClient jsonRpcClient;
     private final Timer timer = new Timer(false);
@@ -40,22 +45,51 @@ public class BitcoindClient {
 
     private boolean stopped;
 
-    private final Map<Sha256Hash, Transaction> txCache = lruCache(10000);
+    private final Map<HashIndex, byte[]> scriptPubKeyCache;
 
     public BitcoindClient(Index index) {
         BitcoindTransport bitcoindTransport;
 
         Config config = Config.get();
-        if((config.getCoreAuthType() == CoreAuthType.COOKIE || config.getCoreAuth() == null || config.getCoreAuth().length() < 2) && config.getCoreDataDir() != null) {
-            bitcoindTransport = new BitcoindTransport(config.getCoreServer(), config.getCoreDataDir());
-        } else if(config.getCoreAuth() != null) {
-            bitcoindTransport = new BitcoindTransport(config.getCoreServer(), config.getCoreAuth());
+        Server coreServer = config.getCoreServer();
+        if(coreServer == null) {
+            coreServer = new Server("http://127.0.0.1:" + Network.get().getDefaultPort());
+            Config.get().setCoreServer(coreServer);
+        }
+
+        CoreAuthType coreAuthType = config.getCoreAuthType();
+        if(coreAuthType == null) {
+            coreAuthType = CoreAuthType.COOKIE;
+            Config.get().setCoreAuthType(coreAuthType);
+        }
+
+        File coreDataDir = config.getCoreDataDir();
+        if(coreDataDir == null) {
+            coreDataDir = getDefaultCoreDataDir();
+            Config.get().setCoreDataDir(coreDataDir);
+        }
+
+        String coreAuth = config.getCoreAuth();
+        if(coreAuth == null) {
+            coreAuth = "user:password";
+            Config.get().setCoreAuth(coreAuth);
+        }
+
+        if(coreAuthType == CoreAuthType.COOKIE || coreAuth.length() < 2) {
+            bitcoindTransport = new BitcoindTransport(coreServer, coreDataDir);
         } else {
-            throw new ConfigurationException("Bitcoin Core data folder or user and password is required");
+            bitcoindTransport = new BitcoindTransport(coreServer, coreAuth);
         }
 
         this.jsonRpcClient = new JsonRpcClient(bitcoindTransport);
         this.index = index;
+
+        Integer cacheSize = Config.get().getScriptPubKeyCacheSize();
+        if(cacheSize == null) {
+            cacheSize = DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE;
+            Config.get().setScriptPubKeyCacheSize(cacheSize);
+        }
+        this.scriptPubKeyCache = lruCache(cacheSize);
     }
 
     public void initialize() {
@@ -102,18 +136,20 @@ public class BitcoindClient {
                     Block block = new Block(Utils.hexToBytes(blockHex));
 
                     Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
-                    Map<HashIndex, TransactionOutput> spentOutputs = new HashMap<>();
+                    Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
                     for(Transaction tx : block.getTransactions()) {
-                        txCache.put(tx.getTxId(), tx);
+                        for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
+                            byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
+                            addtoScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
+                        }
 
-                        if(!tx.isCoinBase() && SilentPaymentUtils.containsTaprootOutput(tx)) {
+                        if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
                             for(TransactionInput txInput : tx.getInputs()) {
                                 HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
-                                Transaction spentTx = getTransaction(hashIndex.getHash());
-                                spentOutputs.put(hashIndex, spentTx.getOutputs().get((int)hashIndex.getIndex()));
+                                spentScriptPubKeys.put(hashIndex, getScriptPubKey(hashIndex));
                             }
 
-                            byte[] tweak = SilentPaymentUtils.getTweak(tx, spentOutputs);
+                            byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys);
                             if(tweak != null) {
                                 BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), i, block.getBlockHeader().getTimeAsDate(), 0L, tx, block.getHash());
                                 eligibleTransactions.put(blkTx, tweak);
@@ -148,15 +184,17 @@ public class BitcoindClient {
         return tip;
     }
 
-    private Transaction getTransaction(Sha256Hash txid) {
-        Transaction tx = txCache.get(txid);
-        if(tx == null) {
-            String txHex = (String)getBitcoindService().getRawTransaction(txid.toString(), false);
-            tx = new Transaction(Utils.hexToBytes(txHex));
-            txCache.put(txid, tx);
+    private Script getScriptPubKey(HashIndex hashIndex) {
+        Script scriptPubKey = getFromScriptPubKeyCache(hashIndex);
+        if(scriptPubKey == null) {
+            String txHex = (String)getBitcoindService().getRawTransaction(hashIndex.getHash().toString(), false);
+            Transaction tx = new Transaction(Utils.hexToBytes(txHex));
+            TransactionOutput txOutput = tx.getOutputs().get((int)hashIndex.getIndex());
+            addtoScriptPubKeyCache(hashIndex.getHash(), (int)hashIndex.getIndex(), txOutput.getScriptBytes());
+            scriptPubKey = getFromScriptPubKeyCache(hashIndex);
         }
 
-        return tx;
+        return scriptPubKey;
     }
 
     private class PollTask extends TimerTask {
@@ -220,6 +258,90 @@ public class BitcoindClient {
 
     private boolean isEmptyBlockchain(BlockchainInfo blockchainInfo) {
         return blockchainInfo.blocks() == 0 && blockchainInfo.getProgressPercent() == 100;
+    }
+
+    private Script getFromScriptPubKeyCache(HashIndex hashIndex) {
+        byte[] scriptPubKeyBytes = scriptPubKeyCache.get(hashIndex);
+        if(scriptPubKeyBytes != null) {
+            return new Script(scriptPubKeyBytes);
+        }
+
+        return null;
+    }
+
+    private void addtoScriptPubKeyCache(Sha256Hash txid, int outputIndex, byte[] scriptPubKeyBytes) {
+        HashIndex hashIndex = new HashIndex(txid, outputIndex);
+        //Only cache if the length of the field matches one of the valid
+        if(getValidScriptType(scriptPubKeyBytes) != null) {
+            scriptPubKeyCache.put(hashIndex, scriptPubKeyBytes);
+        } else {
+            scriptPubKeyCache.put(hashIndex, new byte[0]);
+        }
+    }
+
+    private static boolean containsTaprootOutput(Transaction tx) {
+        for(TransactionOutput txOutput : tx.getOutputs()) {
+            ScriptType scriptType = getValidScriptType(txOutput.getScriptBytes());
+            if(scriptType == ScriptType.P2TR) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static ScriptType getValidScriptType(byte[] scriptPubKey) {
+        if(scriptPubKey == null) {
+            return null;
+        }
+
+        int length = scriptPubKey.length;
+
+        // P2PKH: 25 bytes - OP_DUP OP_HASH160 <20-byte hash> OP_EQUALVERIFY OP_CHECKSIG
+        if(length == 25 &&
+                scriptPubKey[0] == (byte) 0x76 &&  // OP_DUP
+                scriptPubKey[1] == (byte) 0xa9 &&  // OP_HASH160
+                scriptPubKey[2] == (byte) 0x14 &&  // Push 20 bytes
+                scriptPubKey[23] == (byte) 0x88 && // OP_EQUALVERIFY
+                scriptPubKey[24] == (byte) 0xac) { // OP_CHECKSIG
+            return ScriptType.P2PKH;
+        }
+
+        // P2SH-P2WPKH: 23 bytes - OP_HASH160 <20-byte hash> OP_EQUAL
+        if(length == 23 &&
+                scriptPubKey[0] == (byte) 0xa9 &&  // OP_HASH160
+                scriptPubKey[1] == (byte) 0x14 &&  // Push 20 bytes
+                scriptPubKey[22] == (byte) 0x87) { // OP_EQUAL
+            return ScriptType.P2SH_P2WPKH;
+        }
+
+        // P2WPKH: 22 bytes - OP_0 <20-byte hash>
+        if(length == 22 &&
+                scriptPubKey[0] == (byte) 0x00 &&  // OP_0
+                scriptPubKey[1] == (byte) 0x14) {  // Push 20 bytes
+            return ScriptType.P2WPKH;
+        }
+
+        // P2TR: 34 bytes - OP_1 <32-byte taproot output>
+        if(length == 34 &&
+                scriptPubKey[0] == (byte) 0x51 &&  // OP_1
+                scriptPubKey[1] == (byte) 0x20) {  // Push 32 bytes
+            return ScriptType.P2TR;
+        }
+
+        return null;
+    }
+
+    private static File getDefaultCoreDataDir() {
+        OsType osType = OsType.getCurrent();
+        if(osType == OsType.MACOS) {
+            return new File(System.getProperty("user.home") + "/Library/Application Support/Bitcoin");
+        } else if(osType == OsType.WINDOWS) {
+            File oldDir = new File(System.getenv("APPDATA") + "/Bitcoin");
+            return oldDir.exists() ? oldDir : new File(System.getenv("LOCALAPPDATA") + "/Bitcoin");
+        } else {
+            return new File(System.getProperty("user.home") + "/.bitcoin");
+        }
     }
 
     public static <K,V> Map<K,V> lruCache(final int maxSize) {

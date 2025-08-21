@@ -2,12 +2,6 @@ package com.sparrowwallet.frigate.io;
 
 import com.google.common.net.HostAndPort;
 
-import java.io.File;
-import java.io.IOException;
-import java.security.KeyManagementException;
-import java.security.KeyStoreException;
-import java.security.NoSuchAlgorithmException;
-import java.security.cert.CertificateException;
 import java.util.Locale;
 
 public enum Protocol {
