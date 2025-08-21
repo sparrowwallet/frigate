@@ -87,10 +87,7 @@ public class FrigateCli {
     public void scan() {
         JsonRpcClient jsonRpcClient = new JsonRpcClient(new ElectrumTransport(server));
         ElectrumClientService electrumClientService = jsonRpcClient.onDemand(ElectrumClientService.class);
-        long start = System.currentTimeMillis();
         Collection<TxEntry> history = electrumClientService.getSilentPaymentsHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight);
-        long elapsed = System.currentTimeMillis() - start;
-        getLogger().debug("\nScan took " + (elapsed < 1000 ? elapsed + "ms" : elapsed/1000 + "s"));
 
         GsonBuilder gsonBuilder = new GsonBuilder();
         Gson gson = gsonBuilder.setPrettyPrinting().disableHtmlEscaping().create();
@@ -151,10 +148,6 @@ public class FrigateCli {
         File signetFlag = new File(Storage.getFrigateHome(), "network-" + Network.SIGNET.getName());
         if(signetFlag.exists()) {
             Network.set(Network.SIGNET);
-        }
-
-        if(Network.get() != Network.MAINNET) {
-            getLogger().info("Using " + Network.get() + " configuration");
         }
 
         HostAndPort server = HostAndPort.fromString(args.host == null ? "127.0.0.1" : args.host);

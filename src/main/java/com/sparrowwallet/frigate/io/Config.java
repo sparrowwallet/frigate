@@ -19,6 +19,7 @@ public class Config {
     private Boolean startIndexing;
     private Integer indexStartHeight;
     private Integer scriptPubKeyCacheSize;
+    private Integer dbThreads;
 
     private static Config INSTANCE;
 
@@ -124,6 +125,15 @@ public class Config {
 
     public void setScriptPubKeyCacheSize(Integer scriptPubKeyCacheSize) {
         this.scriptPubKeyCacheSize = scriptPubKeyCacheSize;
+        flush();
+    }
+
+    public Integer getDbThreads() {
+        return dbThreads;
+    }
+
+    public void setDbThreads(Integer dbThreads) {
+        this.dbThreads = dbThreads;
         flush();
     }
 

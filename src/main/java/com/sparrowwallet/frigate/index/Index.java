@@ -46,6 +46,9 @@ public class Index {
         try {
             Properties prop = new Properties();
             prop.setProperty("allow_unsigned_extensions", "true");
+            if(Config.get().getDbThreads() != null) {
+                prop.setProperty("threads", Config.get().getDbThreads().toString());
+            }
 
             File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
             connection = (DuckDBConnection)DriverManager.getConnection("jdbc:duckdb:" + dbFile.getAbsolutePath(), prop);
