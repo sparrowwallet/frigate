@@ -19,6 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class Index {
     private static final Logger log = LoggerFactory.getLogger(Index.class);
@@ -30,6 +32,8 @@ public class Index {
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
     private static final int TESTNET_TAPROOT_ACTIVATION_HEIGHT = 0;
     private int lastBlockIndexed = -1;
+
+    private final Lock writeLock = new ReentrantLock();
 
     public void initialize() {
         Integer startHeight = Config.get().getIndexStartHeight();
@@ -59,7 +63,12 @@ public class Index {
 
     public void close() {
         try {
-            connection.close();
+            writeLock.lock();
+            try {
+                connection.close();
+            } finally {
+                writeLock.unlock();
+            }
         } catch(SQLException e) {
             log.error("Error closing index", e);
         }
@@ -102,7 +111,12 @@ public class Index {
                 blockHeight = Math.max(blockHeight, blkTx.getHeight());
             }
 
-            statement.executeBatch();
+            writeLock.lock();
+            try {
+                statement.executeBatch();
+            } finally {
+                writeLock.unlock();
+            }
         } catch(SQLException e) {
             log.error("Error adding to index", e);
         }
