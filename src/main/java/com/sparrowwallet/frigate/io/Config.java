@@ -16,6 +16,7 @@ public class Config {
     private CoreAuthType coreAuthType;
     private File coreDataDir;
     private String coreAuth;
+    private Boolean startIndexing;
     private Integer indexStartHeight;
     private Integer scriptPubKeyCacheSize;
 
@@ -96,6 +97,15 @@ public class Config {
 
     public void setCoreAuth(String coreAuth) {
         this.coreAuth = coreAuth;
+        flush();
+    }
+
+    public Boolean isStartIndexing() {
+        return startIndexing;
+    }
+
+    public void setStartIndexing(Boolean startIndexing) {
+        this.startIndexing = startIndexing;
         flush();
     }
 

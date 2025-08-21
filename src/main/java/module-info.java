@@ -15,5 +15,6 @@ module com.sparrowwallet.frigate {
     exports com.sparrowwallet.frigate.bitcoind;
     exports com.sparrowwallet.frigate.electrum;
     exports com.sparrowwallet.frigate.index;
+    exports com.sparrowwallet.frigate.cli;
     opens com.sparrowwallet.frigate.io;
 }

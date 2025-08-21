@@ -28,7 +28,7 @@ public class BitcoindClient {
     public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 1000000;
 
     private final JsonRpcClient jsonRpcClient;
-    private final Timer timer = new Timer(false);
+    private final Timer timer = new Timer(true);
     private final Index index;
 
     private NetworkInfo networkInfo;

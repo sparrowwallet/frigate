@@ -125,8 +125,8 @@ public class Index {
         this.lastBlockIndexed = blockHeight;
     }
 
-    public List<ScriptHashTx> getHistory(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight) {
-        List<ScriptHashTx> history = new ArrayList<>();
+    public List<TxEntry> getHistory(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight) {
+        List<TxEntry> history = new ArrayList<>();
 
         String sql = "SELECT txid, height FROM " + TWEAK_TABLE +
                 " WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([?, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0)))]), 1))";
@@ -151,7 +151,7 @@ public class Index {
             while(resultSet.next()) {
                 byte[] txid = resultSet.getBytes(1);
                 int height = resultSet.getInt(2);
-                history.add(new ScriptHashTx(height, Utils.bytesToHex(txid), 0L));
+                history.add(new TxEntry(height, 0, Utils.bytesToHex(txid)));
             }
         } catch(SQLException e) {
             log.error("Error scanning index", e);

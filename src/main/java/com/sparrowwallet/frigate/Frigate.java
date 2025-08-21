@@ -7,6 +7,7 @@ import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.electrum.ElectrumServerRunnable;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.Index;
+import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Storage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,12 +35,20 @@ public class Frigate {
         index = new Index();
         index.initialize();
 
-        bitcoindClient = new BitcoindClient(index);
-        bitcoindClient.initialize();
+        Boolean startIndexing = Config.get().isStartIndexing();
+        if(startIndexing == null) {
+            startIndexing = true;
+            Config.get().setStartIndexing(startIndexing);
+        }
 
-        electrumServer = new ElectrumServerRunnable(bitcoindClient);
+        if(startIndexing) {
+            bitcoindClient = new BitcoindClient(index);
+            bitcoindClient.initialize();
+        }
+
+        electrumServer = new ElectrumServerRunnable(bitcoindClient, index);
         Thread electrumServerThread = new Thread(electrumServer, "Frigate Electrum Server");
-        electrumServerThread.setDaemon(true);
+        electrumServerThread.setDaemon(false);
         electrumServerThread.start();
 
         running = true;
@@ -91,7 +100,7 @@ public class Frigate {
 
         if(args.dir != null) {
             System.setProperty(APP_HOME_PROPERTY, args.dir);
-            getLogger().info("Using configured Sparrow home folder of " + args.dir);
+            getLogger().info("Using configured Frigate home folder of " + args.dir);
         }
 
         if(args.network != null) {

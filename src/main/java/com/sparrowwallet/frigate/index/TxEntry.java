@@ -1,4 +1,4 @@
-package com.sparrowwallet.frigate.bitcoind;
+package com.sparrowwallet.frigate.index;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.sparrowwallet.drongo.protocol.Transaction;
@@ -7,10 +7,13 @@ import java.util.Objects;
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class TxEntry implements Comparable<TxEntry> {
-    public final int height;
-    private final transient int index;
-    public final String tx_hash;
-    public final Long fee;
+    public int height;
+    private transient int index;
+    public String tx_hash;
+    public Long fee;
+
+    public TxEntry() {
+    }
 
     public TxEntry(int height, int index, String tx_hash) {
         this.height = height;
@@ -77,4 +80,3 @@ public class TxEntry implements Comparable<TxEntry> {
                 '}';
     }
 }
-

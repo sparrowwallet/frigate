@@ -5,6 +5,7 @@ import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.eventbus.Subscribe;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
+import com.sparrowwallet.frigate.index.Index;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,9 +24,9 @@ public class RequestHandler implements Runnable {
     private boolean headersSubscribed;
     private final Set<String> scriptHashesSubscribed = new HashSet<>();
 
-    public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient) {
+    public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, Index index) {
         this.clientSocket = clientSocket;
-        this.electrumServerService = new ElectrumServerService(bitcoindClient, this);
+        this.electrumServerService = new ElectrumServerService(bitcoindClient, this, index);
     }
 
     public void run() {

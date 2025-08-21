@@ -1,6 +1,7 @@
 package com.sparrowwallet.frigate.electrum;
 
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
+import com.sparrowwallet.frigate.index.Index;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,8 +13,10 @@ import java.util.concurrent.Executors;
 
 public class ElectrumServerRunnable implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumServerRunnable.class);
+    public static final int DEFAULT_PORT = 57001;
 
     private final BitcoindClient bitcoindClient;
+    private final Index index;
 
     protected ServerSocket serverSocket = null;
     protected boolean stopped = false;
@@ -24,8 +27,9 @@ public class ElectrumServerRunnable implements Runnable {
         return t;
     });
 
-    public ElectrumServerRunnable(BitcoindClient bitcoindClient) {
+    public ElectrumServerRunnable(BitcoindClient bitcoindClient, Index index) {
         this.bitcoindClient = bitcoindClient;
+        this.index = index;
         openServerSocket();
     }
 
@@ -37,6 +41,9 @@ public class ElectrumServerRunnable implements Runnable {
         synchronized(this) {
             this.runningThread = Thread.currentThread();
         }
+
+        log.info("Electrum server listening on port {}", getPort());
+
         while(!isStopped()) {
             Socket clientSocket;
             try {
@@ -47,7 +54,7 @@ public class ElectrumServerRunnable implements Runnable {
                 }
                 throw new RuntimeException("Error accepting client connection", e);
             }
-            RequestHandler requestHandler = new RequestHandler(clientSocket, bitcoindClient);
+            RequestHandler requestHandler = new RequestHandler(clientSocket, bitcoindClient, index);
             this.threadPool.execute(requestHandler);
         }
 
@@ -69,7 +76,7 @@ public class ElectrumServerRunnable implements Runnable {
 
     private void openServerSocket() {
         try {
-            serverSocket = new ServerSocket(0);
+            serverSocket = new ServerSocket(DEFAULT_PORT);
         } catch(IOException e) {
             throw new RuntimeException("Cannot open electrum server port", e);
         }

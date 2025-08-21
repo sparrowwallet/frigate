@@ -5,15 +5,22 @@ import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcMethod;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcOptional;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcParam;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcService;
+import com.sparrowwallet.drongo.Utils;
 import com.sparrowwallet.drongo.Version;
+import com.sparrowwallet.drongo.crypto.ECKey;
+import com.sparrowwallet.drongo.protocol.Sha256Hash;
+import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.bitcoind.BlockStats;
 import com.sparrowwallet.frigate.bitcoind.FeeInfo;
 import com.sparrowwallet.frigate.bitcoind.MempoolInfo;
+import com.sparrowwallet.frigate.index.Index;
+import com.sparrowwallet.frigate.index.TxEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 @JsonRpcService
@@ -24,10 +31,12 @@ public class ElectrumServerService {
 
     private final BitcoindClient bitcoindClient;
     private final RequestHandler requestHandler;
+    private final Index index;
 
-    public ElectrumServerService(BitcoindClient bitcoindClient, RequestHandler requestHandler) {
+    public ElectrumServerService(BitcoindClient bitcoindClient, RequestHandler requestHandler, Index index) {
         this.bitcoindClient = bitcoindClient;
         this.requestHandler = requestHandler;
+        this.index = index;
     }
 
     @JsonRpcMethod("server.version")
@@ -161,6 +170,41 @@ public class ElectrumServerService {
             throw new BroadcastFailedException(e.getErrorMessage());
         } catch(IllegalStateException e) {
             throw new BitcoindIOException(e);
+        }
+    }
+
+    @JsonRpcMethod("blockchain.silentpayments.subscribe")
+    public String subscribeSilentPayments(@JsonRpcParam("scanPrivateKey") String scanPrivateKey, @JsonRpcParam("spendPublicKey") String spendPublicKey, @JsonRpcParam("startHeight") @JsonRpcOptional Integer startHeight, @JsonRpcParam("endHeight") @JsonRpcOptional Integer endHeight) {
+        return getScriptHashStatus(getHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight));
+    }
+
+    @JsonRpcMethod("blockchain.silentpayments.unsubscribe")
+    public void unsubscribeSilentPayments(@JsonRpcParam("scanPrivateKey") String scanPrivateKey, @JsonRpcParam("spendPublicKey") String spendPublicKey) {
+
+    }
+
+    @JsonRpcMethod("blockchain.silentpayments.get_history")
+    public Collection<TxEntry> getSilentPaymentsHistory(@JsonRpcParam("scanPrivateKey") String scanPrivateKey, @JsonRpcParam("spendPublicKey") String spendPublicKey, @JsonRpcParam("startHeight") @JsonRpcOptional Integer startHeight, @JsonRpcParam("endHeight") @JsonRpcOptional Integer endHeight) {
+        return getHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight);
+    }
+
+    private List<TxEntry> getHistory(String scanPrivateKey, String spendPublicKey, Integer startHeight, Integer endHeight) {
+        ECKey scanKey = ECKey.fromPrivate(Utils.hexToBytes(scanPrivateKey));
+        ECKey spendKey = ECKey.fromPublicOnly(Utils.hexToBytes(spendPublicKey));
+        SilentPaymentScanAddress silentPaymentScanAddress = SilentPaymentScanAddress.from(scanKey, spendKey);
+        return index.getHistory(silentPaymentScanAddress, startHeight, endHeight);
+    }
+
+    private static String getScriptHashStatus(List<TxEntry> txEntries) {
+        if(!txEntries.isEmpty()) {
+            StringBuilder scriptHashStatus = new StringBuilder();
+            for(TxEntry txEntry : txEntries) {
+                scriptHashStatus.append(txEntry.tx_hash).append(":").append(txEntry.height).append(":");
+            }
+
+            return Utils.bytesToHex(Sha256Hash.hash(scriptHashStatus.toString().getBytes(StandardCharsets.UTF_8)));
+        } else {
+            return null;
         }
     }
 }

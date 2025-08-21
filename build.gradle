@@ -52,6 +52,10 @@ jlink {
     launcher {
         name = 'frigate'
     }
+    secondaryLauncher {
+        name = 'frigate-cli'
+        mainClass = 'com.sparrowwallet.frigate.cli.FrigateCli'
+    }
     jpackage {
         imageName = os.isMacOsX() ? 'Frigate' : 'frigate'
         appVersion = "${version}"

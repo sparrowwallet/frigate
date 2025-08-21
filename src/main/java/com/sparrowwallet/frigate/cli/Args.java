@@ -1,4 +1,4 @@
-package com.sparrowwallet.frigate;
+package com.sparrowwallet.frigate.cli;
 
 import com.beust.jcommander.Parameter;
 import com.sparrowwallet.drongo.Network;
@@ -20,8 +20,23 @@ public class Args {
     @Parameter(names = { "--version", "-v" }, description = "Show version", arity = 0)
     public boolean version;
 
-    @Parameter(names = { "--help", "-h" }, description = "Show usage", help = true)
+    @Parameter(names = { "--help" }, description = "Show usage", help = true)
     public boolean help;
+
+    @Parameter(names = { "--host", "-h" }, description = "Electrum index server host")
+    public String host;
+
+    @Parameter(names = { "--scanPrivateKey", "-s" }, description = "Scan private key")
+    public String scanPrivateKey;
+
+    @Parameter(names = { "--spendPublicKey", "-S" }, description = "Spend public key")
+    public String spendPublicKey;
+
+    @Parameter(names = { "--startHeight", "-b" }, description = "Scan start height")
+    public Integer startHeight;
+
+    @Parameter(names = { "--endHeight", "-e" }, description = "Scan end height")
+    public Integer endHeight;
 
     public List<String> toParams() {
         List<String> params = new ArrayList<>();
