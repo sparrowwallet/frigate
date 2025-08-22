@@ -50,7 +50,7 @@ jlink {
 
     options = ['--strip-native-commands', '--strip-java-debug-attributes', '--compress', 'zip-6', '--no-header-files', '--no-man-pages', '--ignore-signing-information', '--exclude-files', '**.png', '--exclude-resources', 'glob:/com.sparrowwallet.merged.module/META-INF/*']
     launcher {
-        name = 'frigate'
+        name = 'frigated'
     }
     secondaryLauncher {
         name = 'frigate-cli'

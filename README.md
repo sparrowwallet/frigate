@@ -138,17 +138,17 @@ The DuckDB database is stored in a `db` subfolder in the same directory.
 
 The Frigate server may be started as follows:
 ```shell
-./bin/frigate
+./bin/frigated
 ```
 
 To start with a different network, use the `-n` parameter:
 ```shell
-./bin/frigate -n signet
+./bin/frigated -n signet
 ```
 
 The full range of options can be queried with:
 ```shell
-./bin/frigate -h
+./bin/frigated -h
 ```
 
 ### Frigate CLI
