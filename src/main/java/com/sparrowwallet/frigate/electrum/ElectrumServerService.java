@@ -174,17 +174,17 @@ public class ElectrumServerService {
     }
 
     @JsonRpcMethod("blockchain.silentpayments.subscribe")
-    public String subscribeSilentPayments(@JsonRpcParam("scanPrivateKey") String scanPrivateKey, @JsonRpcParam("spendPublicKey") String spendPublicKey, @JsonRpcParam("startHeight") @JsonRpcOptional Integer startHeight, @JsonRpcParam("endHeight") @JsonRpcOptional Integer endHeight) {
+    public String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start_height") @JsonRpcOptional Integer startHeight, @JsonRpcParam("end_height") @JsonRpcOptional Integer endHeight) {
         return getScriptHashStatus(getHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight));
     }
 
     @JsonRpcMethod("blockchain.silentpayments.unsubscribe")
-    public void unsubscribeSilentPayments(@JsonRpcParam("scanPrivateKey") String scanPrivateKey, @JsonRpcParam("spendPublicKey") String spendPublicKey) {
+    public void unsubscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey) {
 
     }
 
     @JsonRpcMethod("blockchain.silentpayments.get_history")
-    public Collection<TxEntry> getSilentPaymentsHistory(@JsonRpcParam("scanPrivateKey") String scanPrivateKey, @JsonRpcParam("spendPublicKey") String spendPublicKey, @JsonRpcParam("startHeight") @JsonRpcOptional Integer startHeight, @JsonRpcParam("endHeight") @JsonRpcOptional Integer endHeight) {
+    public Collection<TxEntry> getSilentPaymentsHistory(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start_height") @JsonRpcOptional Integer startHeight, @JsonRpcParam("end_height") @JsonRpcOptional Integer endHeight) {
         return getHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight);
     }
 

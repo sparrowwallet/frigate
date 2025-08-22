@@ -9,11 +9,9 @@ import com.sparrowwallet.drongo.Drongo;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.index.TxEntry;
-import com.sparrowwallet.frigate.io.Storage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.util.Collection;
 import java.util.Locale;
 import java.util.Scanner;
@@ -133,21 +131,6 @@ public class FrigateCli {
                     getLogger().warn("Invalid " + NETWORK_ENV_PROPERTY + " property: " + envNetwork);
                 }
             }
-        }
-
-        File testnetFlag = new File(Storage.getFrigateHome(), "network-" + Network.TESTNET.getName());
-        if(testnetFlag.exists()) {
-            Network.set(Network.TESTNET);
-        }
-
-        File testnet4Flag = new File(Storage.getFrigateHome(), "network-" + Network.TESTNET4.getName());
-        if(testnet4Flag.exists()) {
-            Network.set(Network.TESTNET4);
-        }
-
-        File signetFlag = new File(Storage.getFrigateHome(), "network-" + Network.SIGNET.getName());
-        if(signetFlag.exists()) {
-            Network.set(Network.SIGNET);
         }
 
         HostAndPort server = HostAndPort.fromString(args.host == null ? "127.0.0.1" : args.host);
