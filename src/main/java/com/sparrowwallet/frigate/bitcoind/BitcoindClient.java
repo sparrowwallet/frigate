@@ -25,7 +25,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public class BitcoindClient {
     private static final Logger log = LoggerFactory.getLogger(BitcoindClient.class);
 
-    public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 1000000;
+    public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 10000000;
 
     private final JsonRpcClient jsonRpcClient;
     private final Timer timer = new Timer(true);
@@ -129,11 +129,14 @@ public class BitcoindClient {
 
     private void updateIndex() {
         if(indexingLock.tryLock()) {
+            BitcoindClientService bitcoindService = getBitcoindService();
+            HexFormat hexFormat = HexFormat.of();
+
             try {
                 for(int i = index.getLastBlockIndexed() + 1; i <= tip.height(); i++) {
                     String blockHash = getBitcoindService().getBlockHash(i);
-                    String blockHex = (String)getBitcoindService().getBlock(blockHash, 0);
-                    Block block = new Block(Utils.hexToBytes(blockHex));
+                    String blockHex = (String)bitcoindService.getBlock(blockHash, 0);
+                    Block block = new Block(hexFormat.parseHex(blockHex));
 
                     Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
                     Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
@@ -146,7 +149,7 @@ public class BitcoindClient {
                         if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
                             for(TransactionInput txInput : tx.getInputs()) {
                                 HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
-                                spentScriptPubKeys.put(hashIndex, getScriptPubKey(hashIndex));
+                                spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
                             }
 
                             byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys);
@@ -184,11 +187,11 @@ public class BitcoindClient {
         return tip;
     }
 
-    private Script getScriptPubKey(HashIndex hashIndex) {
+    private Script getScriptPubKey(BitcoindClientService bitcoindClientService, HexFormat hexFormat, HashIndex hashIndex) {
         Script scriptPubKey = getFromScriptPubKeyCache(hashIndex);
         if(scriptPubKey == null) {
-            String txHex = (String)getBitcoindService().getRawTransaction(hashIndex.getHash().toString(), false);
-            Transaction tx = new Transaction(Utils.hexToBytes(txHex));
+            String txHex = (String)bitcoindClientService.getRawTransaction(hashIndex.getHash().toString(), false);
+            Transaction tx = new Transaction(hexFormat.parseHex(txHex));
             TransactionOutput txOutput = tx.getOutputs().get((int)hashIndex.getIndex());
             addtoScriptPubKeyCache(hashIndex.getHash(), (int)hashIndex.getIndex(), txOutput.getScriptBytes());
             scriptPubKey = getFromScriptPubKeyCache(hashIndex);

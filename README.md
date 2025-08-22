@@ -114,6 +114,8 @@ The behaviour can be configured in the Frigate configuration file (see `dbThread
 An example benchmark is scanning the entire tweak database for the signet chain as of 21 August 2025.
 This query takes just over 2 minutes on a Macbook Pro M1. 
 
+However, it is more typical for queries to be limited to a range of blocks, usually from the date the wallet was created until the current block tip.
+
 ## Configuration
 
 By default Frigate stores all configuration in `~/.frigate/config` on macOS and Linux, and `%APPDATA%/Frigate` on Windows.
