@@ -6,7 +6,7 @@ Frigate is an experimental Electrum Server testing Silent Payments scanning with
 
 ## Motivation
 
-[BIP0352](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki) has proposed that light clients use compact block filters to scan for UTXOs received to a Silent Payments address.
+[BIP 352](https://github.com/bitcoin/bips/blob/master/bip-0352.mediawiki) has proposed that light clients use compact block filters to scan for UTXOs received to a Silent Payments address.
 However, this introduces two significant problems:
 
 The first is one of data gravity.
@@ -28,9 +28,9 @@ This is similar to the widely used public Electrum server approach, where the wa
 
 ## Approach
 
-The key problem that BIP0352 introduces with respect to scanning is that much of the computation cannot be done generally ahead of time.
-Instead, for every silent payment address, each transaction must be considered separately to determine if it sends funds to that address.
-In order to ensure that client keys are ephemeral and not stored, this computation must be done in a reasonable period of time.
+The key problem that BIP 352 introduces with respect to scanning is that much of the computation cannot be done generally ahead of time.
+Instead, for every silent payment address, each transaction in the blockchain must be considered separately to determine if it sends funds to that address.
+In order to ensure that client keys are ephemeral and not stored, this computation must be done in a reasonable period of time on millions of transactions.
 
 In order to achieve this, Frigate addresses the problem of data gravity directly.
 Like most light client silent payment services, it builds an index of the data that can be pre-computed, generally known as a tweak index.
@@ -69,7 +69,7 @@ The client can then download the transaction and determine if it does indeed con
 
 ## Electrum protocol
 
-Frigate contains the following Electrum JSON-RPC methods:
+Frigate contains the following Electrum-style JSON-RPC methods:
 
 #### blockchain.silentpayments.get_history
 
@@ -118,21 +118,35 @@ However, it is more typical for queries to be limited to a range of blocks, usua
 
 ## Configuration
 
+For indexing Frigate will need access to the Bitcoin Core RPC, which will need to have `txindex=1` configured.
+
 By default Frigate stores all configuration in `~/.frigate/config` on macOS and Linux, and `%APPDATA%/Frigate` on Windows.
 An example configuration looks as follows
 ```json
 {
   "coreServer": "http://127.0.0.1:8332",
-  "coreAuthType": "USERPASS",
+  "coreAuthType": "COOKIE",
   "coreDataDir": "/home/bitcoin/.bitcoin",
   "coreAuth": "bitcoin:password",
   "startIndexing": true,
   "indexStartHeight": 0,
-  "scriptPubKeyCacheSize": 1000000
+  "scriptPubKeyCacheSize": 10000000
   //Add this to reduce CPU load: "dbThreads": 2
 }
 ```
-The DuckDB database is stored in a `db` subfolder in the same directory.
+Default values for these entries will be set on first startup.
+The value of `coreAuthType` can either be `COOKIE` or `USERPASS`. 
+Configure `coreDataDir` or `coreAuth` respectively to grant RPC access.
+The value of `startIndexing` can be set to false if the index has already been built and you want to just execute queries against it.
+
+Indexing speed is greatly affected by looking up the scriptPubKeys of spent outputs.
+To improve performance, scriptPubKeys are cached to avoid looking them up again with `getrawtransaction`.
+The `scriptPubKeyCacheSize` limits the number of scriptPubKeys cached during indexing. 
+The default value leads to a total application memory size of around 4Gb. 
+This value can be increased or decreased depending on available RAM. 
+
+The DuckDB database is stored in a `db` subfolder in the same directory, in a file called `duckdb`.
+DuckDB databases can be transferred between different operating systems, and should survive unclean shutdowns.
 
 ## Usage
 
@@ -175,3 +189,45 @@ Enter spend public key: SPEND_PUBLIC_KEY
 Enter start height (optional, press Enter to skip): 890000
 Enter end height (optional, press Enter to skip): 900000
 ```
+
+## Building
+
+To clone this project, use
+
+`git clone --recursive git@github.com:sparrowwallet/frigate.git`
+
+or for those without SSH credentials:
+
+`git clone --recursive https://github.com/sparrowwallet/frigate.git`
+
+In order to build, Frigate requires Java 22 or higher to be installed.
+The release binaries are built with [Eclipse Temurin 22.0.2+9](https://github.com/adoptium/temurin22-binaries/releases/tag/jdk-22.0.2%2B9).
+
+Other packages may also be necessary to build depending on the platform. On Debian/Ubuntu systems:
+
+`sudo apt install -y rpm fakeroot binutils`
+
+The Frigate binaries can be built from source using
+
+`./gradlew jpackage`
+
+Note that to build the Windows installer, you will need to install [WiX](https://github.com/wixtoolset/wix3/releases).
+
+When updating to the latest HEAD
+
+`git pull --recurse-submodules`
+
+## Reporting Issues
+
+Please use the [Issues](https://github.com/sparrowwallet/frigate/issues) tab above to report an issue. If possible, look in the frigate.log file in the configuration directory for information helpful in debugging.
+
+## License
+
+Frigate is licensed under the Apache 2 software licence.
+
+## GPG Key
+
+The Frigate release binaries here are signed using [craigraw's GPG key](https://keybase.io/craigraw):  
+Fingerprint: D4D0D3202FC06849A257B38DE94618334C674B40  
+64-bit: E946 1833 4C67 4B40
+

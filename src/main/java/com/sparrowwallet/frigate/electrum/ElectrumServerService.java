@@ -69,6 +69,11 @@ public class ElectrumServerService {
         }
     }
 
+    @JsonRpcMethod("mempool.get_fee_histogram")
+    public List<List<Number>> getFeeHistogram() {
+        throw new UnsupportedOperationException("Not yet implemented");
+    }
+
     @JsonRpcMethod("blockchain.relayfee")
     public Double getRelayFee() throws BitcoindIOException {
         try {
@@ -92,6 +97,21 @@ public class ElectrumServerService {
         } catch(IllegalStateException e) {
             throw new BitcoindIOException(e);
         }
+    }
+
+    @JsonRpcMethod("blockchain.scripthash.subscribe")
+    public String subscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) {
+        throw new UnsupportedOperationException("Not yet implemented");
+    }
+
+    @JsonRpcMethod("blockchain.scripthash.unsubscribe")
+    public String unsubscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) {
+        throw new UnsupportedOperationException("Not yet implemented");
+    }
+
+    @JsonRpcMethod("blockchain.scripthash.get_history")
+    public Collection<TxEntry> getHistory(@JsonRpcParam("scripthash") String scriptHash) {
+        throw new UnsupportedOperationException("Not yet implemented");
     }
 
     @JsonRpcMethod("blockchain.block.header")
