@@ -69,39 +69,101 @@ The client can then download the transaction and determine if it does indeed con
 
 ## Electrum protocol
 
-Frigate contains the following Electrum-style JSON-RPC methods:
+The Electrum protocol is by far the most widely used light client protocol for Bitcoin wallets, and support is now almost a requirement for widespread adoption of any wallet technology proposal.
+It is characterised by resource efficiency for the client in terms of bandwidth, CPU and storage, allowing a good user experience on almost any platform. 
+It has however been designed around BIP32 wallets. 
+Silent Payments presents an alternative model, where instead of an incrementing derivation path index (and associated gap limit) transactions must be found through scanning the blockchain.
+As such, new methods are necessary.
+Frigate proposes the following Electrum JSON-RPC methods:
 
-#### blockchain.silentpayments.get_history
+### blockchain.silentpayments.subscribe
 
 **Signature**
 ```
-blockchain.silentpayments.get_history(scan_private_key, spend_public_key, start_height, end_height)
+blockchain.silentpayments.subscribe(scan_private_key, spend_public_key, start)
 ```
 
-- _scan_private_key_: A 64 character string containing the hex of the scan private key
-- _spend_public_key_: A 66 character string containing the hex of the spend public key
-- _start_height_: (Optional) Block height to start scanning from
-- _end_height_: (Optional) Block height to stop scanning at
+- _scan_private_key_: A 64 character string containing the hex of the scan private key.
+- _spend_public_key_: A 66 character string containing the hex of the spend public key.
+- _start_: (Optional) Block height or timestamp to start scanning from. Values above 500,000 are treated as seconds from the start of the epoch.
 
 **Result**
 
-A list of confirmed transactions in blockchain order. Each confirmed transaction is a dictionary with the following keys:
-- _height_: The integer height of the block the transaction was confirmed in.
-- _tx_hash_: The transaction hash in hexadecimal.
+The silent payment address that has been subscribed.
 
-**Result Examples**
+**Result Example**
 
 ```json
-[
-  {
-    "height": 890004,
-    "tx_hash": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412"
+sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv
+```
+
+### Notifications
+
+Once subscribed, the client will receive notifications as results are returned from the scan with the following signature:
+
+```
+blockchain.silentpayments.subscribe(subscription, progress, history)
+```
+
+**Result**
+
+A dictionary with the following key/value pairs:
+
+1. A `subscription` JSON object literal containing details of the current subscription:
+- _address_: The silent payment address that has been subscribed to.
+- _startHeight_: The block height from which the subscription scan was started.
+
+2. A `progress` key/value pair indicating the progress of a historical scan:
+- _progress_: A floating point value between `0.0` and `1.0`. Will be `1.0` for all current (up to date) results.
+
+3. A `history` array of confirmed transactions in blockchain order. Each confirmed transaction is a dictionary with the following keys:
+- _height_: The integer height of the block the transaction was confirmed in. For mempool transactions, `0` if all inputs are confirmed, and `-1` otherwise.
+- _tx_hash_: The transaction hash in hexadecimal.
+
+**Result Example**
+
+```json
+{
+  "subscription": {
+    "address": "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+    "startHeight": 882000
   },
-  {
-    "height": 905008,
-    "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403"
-  }
-]
+  "progress": 1.0,
+  "history": [
+    {
+      "height": 890004,
+      "tx_hash": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412"
+    },
+    {
+      "height": 905008,
+      "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403"
+    }
+  ]
+}
+```
+
+It is recommended that servers implementing this protocol send history results incrementally as the historical scan progresses.
+In addition, a maximum page size of 100 history items is suggested.
+This will avoid transmission issues with large wallets that have many transactions, while providing the client with regular progress updates.
+
+### blockchain.silentpayments.unsubscribe
+
+**Signature**
+```
+blockchain.silentpayments.unsubscribe(scan_private_key, spend_public_key)
+```
+
+- _scan_private_key_: A 64 character string containing the hex of the scan private key.
+- _spend_public_key_: A 66 character string containing the hex of the spend public key.
+
+**Result**
+
+The silent payment address that has been unsubscribed. This should cancel any scans that may be currently running for this address.
+
+**Result Example**
+
+```json
+sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv
 ```
 
 ## Performance
@@ -167,7 +229,7 @@ The full range of options can be queried with:
 
 ### Frigate CLI
 
-Frigate also ships a CLI tool called `frigate-cli` to allow easy access to the Electrum scanning RPC.
+Frigate also ships a CLI tool called `frigate-cli` to allow easy access to the Electrum RPC.
 ```shell
 ./bin/frigate-cli
 ```
@@ -177,17 +239,16 @@ It uses similar arguments, for example:
 ./bin/frigate-cli -n signet
 ```
 
-The scan private key and spend public key, along with start and end block heights, can be specified as arguments or are prompted for:
+The scan private key and spend public key, along with the start block height or timestamp, can be specified as arguments or are prompted for:
 ```shell
-./bin/frigate-cli -s SCAN_PRIVATE_KEY -S SPEND_PUBLIC_KEY -b 890000 -e 900000
+./bin/frigate-cli -s SCAN_PRIVATE_KEY -S SPEND_PUBLIC_KEY -b 890000
 ```
 
 ```shell
 ./bin/frigate-cli
 Enter scan private key: SCAN_PRIVATE_KEY
 Enter spend public key: SPEND_PUBLIC_KEY
-Enter start height (optional, press Enter to skip): 890000
-Enter end height (optional, press Enter to skip): 900000
+Enter start block height or timestamp (optional, press Enter to skip): 890000
 ```
 
 ## Building

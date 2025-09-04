@@ -1,6 +1,7 @@
 module com.sparrowwallet.frigate {
     requires com.sparrowwallet.drongo;
     requires org.duckdb.duckdb_jdbc;
+    requires com.zaxxer.hikari;
     requires com.fasterxml.jackson.annotation;
     requires simple.json.rpc.core;
     requires simple.json.rpc.client;

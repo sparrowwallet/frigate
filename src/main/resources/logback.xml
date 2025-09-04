@@ -2,6 +2,10 @@
     <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
 
     <logger name="sun.net.www.protocol.http.HttpURLConnection" level="INFO" />
+    <logger name="com.github.arteam.simplejsonrpc.server.JsonRpcServer" level="INFO" />
+    <logger name="com.zaxxer.hikari.HikariDataSource" level="WARN" />
+    <logger name="com.zaxxer.hikari.pool.PoolBase" level="ERROR" />
+    <logger name="com.zaxxer.hikari.pool.HikariPool" level="ERROR" />
 
     <define name="appDir" class="com.sparrowwallet.drongo.PropertyDefiner">
         <application>frigate</application>

@@ -8,7 +8,7 @@ import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcService;
 import com.sparrowwallet.drongo.Utils;
 import com.sparrowwallet.drongo.Version;
 import com.sparrowwallet.drongo.crypto.ECKey;
-import com.sparrowwallet.drongo.protocol.Sha256Hash;
+import com.sparrowwallet.drongo.protocol.Transaction;
 import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
@@ -20,7 +20,7 @@ import com.sparrowwallet.frigate.index.TxEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.charset.StandardCharsets;
+import java.lang.ref.WeakReference;
 import java.util.*;
 
 @JsonRpcService
@@ -194,37 +194,39 @@ public class ElectrumServerService {
     }
 
     @JsonRpcMethod("blockchain.silentpayments.subscribe")
-    public String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start_height") @JsonRpcOptional Integer startHeight, @JsonRpcParam("end_height") @JsonRpcOptional Integer endHeight) {
-        return getScriptHashStatus(getHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight));
+    public String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Long start) {
+        SilentPaymentScanAddress silentPaymentScanAddress = getSilentPaymentScanAddress(scanPrivateKey, spendPublicKey);
+        requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress);
+
+        int startHeight = getStartHeight(start);
+        index.startHistoryScan(silentPaymentScanAddress, startHeight, null, new WeakReference<>(requestHandler));
+
+        return silentPaymentScanAddress.getAddress();
     }
 
     @JsonRpcMethod("blockchain.silentpayments.unsubscribe")
-    public void unsubscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey) {
+    public String unsubscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey) {
+        SilentPaymentScanAddress silentPaymentScanAddress = getSilentPaymentScanAddress(scanPrivateKey, spendPublicKey);
+        requestHandler.unsubscribeSilentPaymentsAddress(silentPaymentScanAddress);
 
+        return silentPaymentScanAddress.getAddress();
     }
 
-    @JsonRpcMethod("blockchain.silentpayments.get_history")
-    public Collection<TxEntry> getSilentPaymentsHistory(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start_height") @JsonRpcOptional Integer startHeight, @JsonRpcParam("end_height") @JsonRpcOptional Integer endHeight) {
-        return getHistory(scanPrivateKey, spendPublicKey, startHeight, endHeight);
-    }
-
-    private List<TxEntry> getHistory(String scanPrivateKey, String spendPublicKey, Integer startHeight, Integer endHeight) {
+    private static SilentPaymentScanAddress getSilentPaymentScanAddress(String scanPrivateKey, String spendPublicKey) {
         ECKey scanKey = ECKey.fromPrivate(Utils.hexToBytes(scanPrivateKey));
         ECKey spendKey = ECKey.fromPublicOnly(Utils.hexToBytes(spendPublicKey));
-        SilentPaymentScanAddress silentPaymentScanAddress = SilentPaymentScanAddress.from(scanKey, spendKey);
-        return index.getHistory(silentPaymentScanAddress, startHeight, endHeight);
+        return SilentPaymentScanAddress.from(scanKey, spendKey);
     }
 
-    private static String getScriptHashStatus(List<TxEntry> txEntries) {
-        if(!txEntries.isEmpty()) {
-            StringBuilder scriptHashStatus = new StringBuilder();
-            for(TxEntry txEntry : txEntries) {
-                scriptHashStatus.append(txEntry.tx_hash).append(":").append(txEntry.height).append(":");
+    private int getStartHeight(Long start) {
+        int startHeight = 0;
+        if(start != null) {
+            if(start > Transaction.MAX_BLOCK_LOCKTIME) {
+                startHeight = bitcoindClient.findBlockByTimestamp(start);
+            } else if(start > 0) {
+                startHeight = start.intValue();
             }
-
-            return Utils.bytesToHex(Sha256Hash.hash(scriptHashStatus.toString().getBytes(StandardCharsets.UTF_8)));
-        } else {
-            return null;
         }
+        return startHeight;
     }
 }

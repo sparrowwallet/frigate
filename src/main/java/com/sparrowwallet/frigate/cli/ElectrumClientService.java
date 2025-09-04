@@ -13,6 +13,6 @@ import java.util.Collection;
 @JsonRpcService
 @JsonRpcParams(ParamsType.ARRAY)
 public interface ElectrumClientService {
-    @JsonRpcMethod("blockchain.silentpayments.get_history")
-    Collection<TxEntry> getSilentPaymentsHistory(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start_height") @JsonRpcOptional Integer startHeight, @JsonRpcParam("end_height") @JsonRpcOptional Integer endHeight);
+    @JsonRpcMethod("blockchain.silentpayments.subscribe")
+    String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Long start);
 }

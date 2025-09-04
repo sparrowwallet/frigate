@@ -1,39 +1,49 @@
 package com.sparrowwallet.frigate.index;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.drongo.Utils;
 import com.sparrowwallet.drongo.protocol.*;
 import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.drongo.wallet.BlockTransaction;
 import com.sparrowwallet.frigate.ConfigurationException;
-import com.sparrowwallet.frigate.ScriptHashTx;
+import com.sparrowwallet.frigate.Frigate;
+import com.sparrowwallet.frigate.SubscriptionStatus;
+import com.sparrowwallet.frigate.electrum.SilentPaymentsNotification;
+import com.sparrowwallet.frigate.electrum.SilentPaymentsSubscription;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Storage;
-import org.duckdb.DuckDBConnection;
+import org.duckdb.DuckDBPreparedStatement;
+import org.duckdb.QueryProgress;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class Index {
     private static final Logger log = LoggerFactory.getLogger(Index.class);
     public static final String DB_FILENAME = "duckdb";
     private static final String TWEAK_TABLE = "tweak";
+    public static final int HISTORY_PAGE_SIZE = 100;
+    public static final double PROGRESS_COMPLETE = 1.0d;
 
-    private DuckDBConnection connection;
+    private IndexConnectionManager indexConnectionManager;
 
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
     private static final int TESTNET_TAPROOT_ACTIVATION_HEIGHT = 0;
     private int lastBlockIndexed = -1;
 
-    private final Lock writeLock = new ReentrantLock();
+    private final ExecutorService queryPool = Executors.newFixedThreadPool(10, r -> {
+        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQuery-%d").build();
+        Thread t = namedThreadFactory.newThread(r);
+        t.setDaemon(true);
+        return t;
+    });
 
     public void initialize() {
         Integer startHeight = Config.get().getIndexStartHeight();
@@ -43,124 +53,197 @@ public class Index {
         }
         lastBlockIndexed = Math.max(lastBlockIndexed, startHeight - 1);
 
+        File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
+        indexConnectionManager = new IndexConnectionManager(dbFile.getAbsolutePath());
+
         try {
-            Properties prop = new Properties();
-            prop.setProperty("allow_unsigned_extensions", "true");
-            if(Config.get().getDbThreads() != null) {
-                prop.setProperty("threads", Config.get().getDbThreads().toString());
-            }
-
-            File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
-            connection = (DuckDBConnection)DriverManager.getConnection("jdbc:duckdb:" + dbFile.getAbsolutePath(), prop);
-
-            File secp256k1ExtensionFile = Storage.getSecp256k1ExtensionFile();
-            Statement loadStmt = connection.createStatement();
-            loadStmt.execute("LOAD '" + secp256k1ExtensionFile.getAbsolutePath() + "'");
-
-            Statement createStmt = connection.createStatement();
-            createStmt.execute("CREATE TABLE IF NOT EXISTS " + TWEAK_TABLE + " (txid BLOB NOT NULL, height INTEGER NOT NULL, tweak_key BLOB NOT NULL, outputs BIGINT[])");
-        } catch(SQLException e) {
+            indexConnectionManager.executeWrite(connection -> {
+                try(Statement stmt = connection.createStatement()) {
+                    return stmt.execute("CREATE TABLE IF NOT EXISTS " + TWEAK_TABLE + " (txid BLOB NOT NULL, height INTEGER NOT NULL, tweak_key BLOB NOT NULL, outputs BIGINT[])");
+                }
+            });
+        } catch(Exception e) {
             throw new ConfigurationException("Error initialising index", e);
         }
     }
 
     public void close() {
-        try {
-            writeLock.lock();
-            try {
-                connection.close();
-            } finally {
-                writeLock.unlock();
-            }
-        } catch(SQLException e) {
-            log.error("Error closing index", e);
-        }
+        indexConnectionManager.close();
     }
 
     public int getLastBlockIndexed() {
         try {
-            PreparedStatement statement = connection.prepareStatement("SELECT MAX(height) from " + TWEAK_TABLE);
-            ResultSet resultSet = statement.executeQuery();
-            if(resultSet.next()) {
-                lastBlockIndexed = Math.max(lastBlockIndexed, resultSet.getInt(1));
-            }
-        } catch(SQLException e) {
+            return indexConnectionManager.executeRead(connection -> {
+                try(PreparedStatement statement = connection.prepareStatement("SELECT MAX(height) from " + TWEAK_TABLE)) {
+                    ResultSet resultSet = statement.executeQuery();
+                    return resultSet.next() ? Math.max(lastBlockIndexed, resultSet.getInt(1)) : lastBlockIndexed;
+                }
+            });
+        } catch(Exception e) {
             log.error("Error getting last block indexed", e);
+            return lastBlockIndexed;
         }
-
-        return lastBlockIndexed;
     }
 
     public void addToIndex(Map<BlockTransaction, byte[]> transactions) {
-        int blockHeight = -1;
+        if(indexConnectionManager.isShutdown()) {
+            return;
+        }
 
-        try(PreparedStatement statement = connection.prepareStatement("INSERT INTO " + TWEAK_TABLE + " VALUES (?, ?, ?, ?)")) {
-            for(BlockTransaction blkTx : transactions.keySet()) {
-                statement.setBytes(1, blkTx.getTransaction().getTxId().getBytes());
-                statement.setInt(2, blkTx.getHeight());
-                statement.setObject(3, transactions.get(blkTx));
+        try {
+            lastBlockIndexed = indexConnectionManager.executeWrite(connection -> {
+                try(PreparedStatement statement = connection.prepareStatement("INSERT INTO " + TWEAK_TABLE + " VALUES (?, ?, ?, ?)")) {
+                    int blockHeight = -1;
 
-                List<TransactionOutput> outputs = blkTx.getTransaction().getOutputs();
-                List<Long> hashPrefixes = new ArrayList<>();
-                for(TransactionOutput output : outputs) {
-                    if(ScriptType.P2TR.isScriptType(output.getScript())) {
-                        long hashPrefix = getHashPrefix(ScriptType.P2TR.getPublicKeyFromScript(output.getScript()).getPubKey(), 1);
-                        hashPrefixes.add(hashPrefix);
+                    for(BlockTransaction blkTx : transactions.keySet()) {
+                        statement.setBytes(1, blkTx.getTransaction().getTxId().getBytes());
+                        statement.setInt(2, blkTx.getHeight());
+                        statement.setObject(3, transactions.get(blkTx));
+
+                        List<TransactionOutput> outputs = blkTx.getTransaction().getOutputs();
+                        List<Long> hashPrefixes = new ArrayList<>();
+                        for(TransactionOutput output : outputs) {
+                            if(ScriptType.P2TR.isScriptType(output.getScript())) {
+                                long hashPrefix = getHashPrefix(ScriptType.P2TR.getPublicKeyFromScript(output.getScript()).getPubKey(), 1);
+                                hashPrefixes.add(hashPrefix);
+                            }
+                        }
+                        statement.setArray(4, connection.createArrayOf("BIGINT", hashPrefixes.toArray()));
+                        statement.addBatch();
+
+                        blockHeight = Math.max(blockHeight, blkTx.getHeight());
                     }
+
+                    statement.executeBatch();
+                    log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
+
+                    return blockHeight;
                 }
-                statement.setArray(4, connection.createArrayOf("BIGINT", hashPrefixes.toArray()));
-                statement.addBatch();
-
-                blockHeight = Math.max(blockHeight, blkTx.getHeight());
-            }
-
-            writeLock.lock();
-            try {
-                statement.executeBatch();
-            } finally {
-                writeLock.unlock();
-            }
-        } catch(SQLException e) {
+            });
+        } catch(Exception e) {
             log.error("Error adding to index", e);
         }
-
-        log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
-        this.lastBlockIndexed = blockHeight;
     }
 
-    public List<TxEntry> getHistory(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight) {
-        List<TxEntry> history = new ArrayList<>();
+    public void startHistoryScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+        queryPool.submit(() -> getHistoryAsync(scanAddress, startHeight, endHeight, subscriptionStatusRef));
+    }
 
-        String sql = "SELECT txid, height FROM " + TWEAK_TABLE +
-                " WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([?, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0)))]), 1))";
+    public void getHistoryAsync(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+        SilentPaymentsSubscription subscription = new SilentPaymentsSubscription(scanAddress.toString(), startHeight == null ? 0 : startHeight);
+        ConcurrentLinkedQueue<TxEntry> queue = new ConcurrentLinkedQueue<>();
+        AtomicLong rowsProcessedStart = new AtomicLong(0L);
 
-        if(startHeight != null) {
-            sql += " AND height >= ?";
-        }
-        if(endHeight != null) {
-            sql += " AND height <= ?";
-        }
+        try {
+            indexConnectionManager.executeRead(connection -> {
+                String sql = "SELECT txid, height FROM " + TWEAK_TABLE +
+                        " WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([?, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0)))]), 1))";
 
-        try(PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setBytes(1, scanAddress.getSpendKey().getPubKey());
-            statement.setBytes(2, scanAddress.getScanKey().getPrivKeyBytes());
-            if(startHeight != null) {
-                statement.setInt(3, startHeight);
+                if(startHeight != null) {
+                    sql += " AND height >= ?";
+                }
+                if(endHeight != null) {
+                    sql += " AND height <= ?";
+                }
+
+                try(DuckDBPreparedStatement statement = connection.prepareStatement(sql).unwrap(DuckDBPreparedStatement.class)) {
+                    if(isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+                        return false;
+                    }
+
+                    statement.setBytes(1, scanAddress.getSpendKey().getPubKey());
+                    statement.setBytes(2, scanAddress.getScanKey().getPrivKeyBytes());
+                    if(startHeight != null) {
+                        statement.setInt(3, startHeight);
+                    }
+                    if(endHeight != null) {
+                        statement.setInt(startHeight == null ? 3 : 4, endHeight);
+                    }
+                    statement.setFetchSize(1);
+
+                    try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, r -> {
+                        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQueryProgress-%d").build();
+                        Thread t = namedThreadFactory.newThread(r);
+                        t.setDaemon(true);
+                        return t;
+                    })) {
+                        queryProgressExecutor.scheduleAtFixedRate(() -> {
+                            try {
+                                if(indexConnectionManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+                                    statement.cancel();
+                                    queryProgressExecutor.shutdownNow();
+                                    return;
+                                }
+
+                                QueryProgress queryProgress = statement.getQueryProgress();
+                                if(queryProgress.getRowsProcessed() == queryProgress.getTotalRowsToProcess()) {
+                                    return;
+                                }
+
+                                double progress = 0.0d;
+                                if(rowsProcessedStart.get() == 0L && queryProgress.getRowsProcessed() > 0) {
+                                    rowsProcessedStart.set(queryProgress.getRowsProcessed());
+                                }
+                                if(rowsProcessedStart.get() > 0L) {
+                                    progress = (queryProgress.getRowsProcessed() - rowsProcessedStart.get()) / (double)(queryProgress.getTotalRowsToProcess() - rowsProcessedStart.get());
+                                }
+
+                                List<TxEntry> history = new ArrayList<>();
+                                TxEntry entry;
+                                while((entry = queue.poll()) != null) {
+                                    history.add(entry);
+                                    if(history.size() >= HISTORY_PAGE_SIZE) {
+                                        Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
+                                        history.clear();
+                                    }
+                                }
+                                if(!history.isEmpty() || queryProgressExecutor.getTaskCount() % 5 == 0) {
+                                    Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
+                                    history.clear();
+                                }
+                            } catch(SQLException e) {
+                                log.error("Error getting query progress", e);
+                            }
+                        }, 1, 1, TimeUnit.SECONDS);
+
+                        ResultSet resultSet = statement.executeQuery();
+                        while(resultSet.next()) {
+                            byte[] txid = resultSet.getBytes(1);
+                            int height = resultSet.getInt(2);
+                            queue.offer(new TxEntry(height, 0, Utils.bytesToHex(txid)));
+                        }
+                    }
+                }
+
+                return true;
+            });
+        } catch(SQLTimeoutException e) {
+            if(e.getMessage().startsWith("INTERRUPT Error")) {
+                log.debug("Query cancelled", e);
+            } else {
+                log.error("Query timeout", e);
             }
-            if(endHeight != null) {
-                statement.setInt(startHeight == null ? 3 : 4, endHeight);
-            }
-            ResultSet resultSet = statement.executeQuery();
-            while(resultSet.next()) {
-                byte[] txid = resultSet.getBytes(1);
-                int height = resultSet.getInt(2);
-                history.add(new TxEntry(height, 0, Utils.bytesToHex(txid)));
-            }
-        } catch(SQLException e) {
+            return;
+        } catch(Exception e) {
             log.error("Error scanning index", e);
+            return;
         }
 
-        return history;
+        if(isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+            return;
+        }
+
+        List<TxEntry> history = new ArrayList<>();
+        TxEntry entry;
+        while((entry = queue.poll()) != null) {
+            history.add(entry);
+        }
+        Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, PROGRESS_COMPLETE, new ArrayList<>(history), subscriptionStatusRef.get()));
+    }
+
+    private static boolean isUnsubscribed(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+        SubscriptionStatus status = subscriptionStatusRef.get();
+        return status == null || !status.isConnected() || !status.isSilentPaymentsAddressSubscribed(scanAddress.toString());
     }
 
     public static long getHashPrefix(byte[] hash, int offset) {

@@ -32,28 +32,6 @@ public class Args {
     @Parameter(names = { "--spendPublicKey", "-S" }, description = "Spend public key")
     public String spendPublicKey;
 
-    @Parameter(names = { "--startHeight", "-b" }, description = "Scan start height")
-    public Integer startHeight;
-
-    @Parameter(names = { "--endHeight", "-e" }, description = "Scan end height")
-    public Integer endHeight;
-
-    public List<String> toParams() {
-        List<String> params = new ArrayList<>();
-
-        if(dir != null) {
-            params.add("-d");
-            params.add(dir);
-        }
-        if(network != null) {
-            params.add("-n");
-            params.add(network.toString());
-        }
-        if(level != null) {
-            params.add("-l");
-            params.add(level.toString());
-        }
-
-        return params;
-    }
+    @Parameter(names = { "--start", "-b" }, description = "Scan start block height or timestamp")
+    public Long start;
 }

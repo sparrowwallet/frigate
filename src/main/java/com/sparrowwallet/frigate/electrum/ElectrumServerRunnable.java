@@ -1,5 +1,6 @@
 package com.sparrowwallet.frigate.electrum;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.Index;
 import org.slf4j.Logger;
@@ -10,6 +11,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 public class ElectrumServerRunnable implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumServerRunnable.class);
@@ -21,8 +23,9 @@ public class ElectrumServerRunnable implements Runnable {
     protected ServerSocket serverSocket = null;
     protected boolean stopped = false;
     protected Thread runningThread = null;
-    protected ExecutorService threadPool = Executors.newFixedThreadPool(10, r -> {
-        Thread t = Executors.defaultThreadFactory().newThread(r);
+    protected ExecutorService requestPool = Executors.newFixedThreadPool(10, r -> {
+        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("ElectrumServerRequest-%d").build();
+        Thread t = namedThreadFactory.newThread(r);
         t.setDaemon(true);
         return t;
     });
@@ -55,10 +58,10 @@ public class ElectrumServerRunnable implements Runnable {
                 throw new RuntimeException("Error accepting client connection", e);
             }
             RequestHandler requestHandler = new RequestHandler(clientSocket, bitcoindClient, index);
-            this.threadPool.execute(requestHandler);
+            this.requestPool.execute(requestHandler);
         }
 
-        this.threadPool.shutdown();
+        this.requestPool.shutdown();
     }
 
     private synchronized boolean isStopped() {

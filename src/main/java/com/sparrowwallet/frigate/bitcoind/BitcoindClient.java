@@ -259,6 +259,37 @@ public class BitcoindClient {
         }
     }
 
+    public Integer findBlockByTimestamp(long targetTimestamp) {
+        if(targetTimestamp < 0) {
+            throw new IllegalArgumentException("Target timestamp cannot be negative");
+        }
+
+        int low = 0;
+        int high = tip.height();
+        int bestHeight = 0;
+
+        while(low <= high) {
+            int mid = (low + high) / 2;
+
+            try {
+                BlockStats blockStats = getBitcoindService().getBlockStats(mid);
+                long blockTimestamp = blockStats.time();
+
+                if(blockTimestamp <= targetTimestamp) {
+                    bestHeight = mid;
+                    low = mid + 1;
+                } else {
+                    high = mid - 1;
+                }
+            } catch(Exception e) {
+                log.warn("Error getting block stats for block height " + mid, e);
+                return bestHeight;
+            }
+        }
+
+        return bestHeight;
+    }
+
     private boolean isEmptyBlockchain(BlockchainInfo blockchainInfo) {
         return blockchainInfo.blocks() == 0 && blockchainInfo.getProgressPercent() == 100;
     }
