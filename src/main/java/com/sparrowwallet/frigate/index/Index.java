@@ -32,7 +32,7 @@ public class Index {
     public static final int HISTORY_PAGE_SIZE = 100;
     public static final double PROGRESS_COMPLETE = 1.0d;
 
-    private IndexConnectionManager indexConnectionManager;
+    private DbManager dbManager;
 
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
     private static final int TESTNET_TAPROOT_ACTIVATION_HEIGHT = 0;
@@ -53,11 +53,18 @@ public class Index {
         }
         lastBlockIndexed = Math.max(lastBlockIndexed, startHeight - 1);
 
-        File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
-        indexConnectionManager = new IndexConnectionManager(dbFile.getAbsolutePath());
+        String dbUrl = Config.get().getDbUrl();
+        List<String> readDbUrls = Config.get().getReadDbUrls();
+        if(dbUrl != null && readDbUrls != null && !readDbUrls.isEmpty()) {
+            dbManager = new ScalingDbManager(dbUrl, readDbUrls);
+        } else if(dbUrl == null) {
+            File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
+            dbUrl = DbManager.DB_PREFIX + dbFile.getAbsolutePath();
+        }
+        dbManager = new SingleDbManager(dbUrl);
 
         try {
-            indexConnectionManager.executeWrite(connection -> {
+            dbManager.executeWrite(connection -> {
                 try(Statement stmt = connection.createStatement()) {
                     return stmt.execute("CREATE TABLE IF NOT EXISTS " + TWEAK_TABLE + " (txid BLOB NOT NULL, height INTEGER NOT NULL, tweak_key BLOB NOT NULL, outputs BIGINT[])");
                 }
@@ -68,12 +75,12 @@ public class Index {
     }
 
     public void close() {
-        indexConnectionManager.close();
+        dbManager.close();
     }
 
     public int getLastBlockIndexed() {
         try {
-            return indexConnectionManager.executeRead(connection -> {
+            return dbManager.executeRead(connection -> {
                 try(PreparedStatement statement = connection.prepareStatement("SELECT MAX(height) from " + TWEAK_TABLE)) {
                     ResultSet resultSet = statement.executeQuery();
                     return resultSet.next() ? Math.max(lastBlockIndexed, resultSet.getInt(1)) : lastBlockIndexed;
@@ -86,12 +93,12 @@ public class Index {
     }
 
     public void addToIndex(Map<BlockTransaction, byte[]> transactions) {
-        if(indexConnectionManager.isShutdown()) {
+        if(dbManager.isShutdown()) {
             return;
         }
 
         try {
-            lastBlockIndexed = indexConnectionManager.executeWrite(connection -> {
+            lastBlockIndexed = dbManager.executeWrite(connection -> {
                 try(PreparedStatement statement = connection.prepareStatement("INSERT INTO " + TWEAK_TABLE + " VALUES (?, ?, ?, ?)")) {
                     int blockHeight = -1;
 
@@ -135,7 +142,7 @@ public class Index {
         AtomicLong rowsProcessedStart = new AtomicLong(0L);
 
         try {
-            indexConnectionManager.executeRead(connection -> {
+            dbManager.executeRead(connection -> {
                 String sql = "SELECT txid, height FROM " + TWEAK_TABLE +
                         " WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([?, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0)))]), 1))";
 
@@ -169,7 +176,7 @@ public class Index {
                     })) {
                         queryProgressExecutor.scheduleAtFixedRate(() -> {
                             try {
-                                if(indexConnectionManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+                                if(dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef)) {
                                     statement.cancel();
                                     queryProgressExecutor.shutdownNow();
                                     return;

@@ -1,65 +1,37 @@
 package com.sparrowwallet.frigate.index;
 
-import com.sparrowwallet.frigate.io.Config;
-import com.sparrowwallet.frigate.io.Storage;
-import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.Semaphore;
 
-public class IndexConnectionManager {
-    private static final Logger log = LoggerFactory.getLogger(IndexConnectionManager.class);
+public class SingleDbManager extends AbstractDbManager {
+    private static final Logger log = LoggerFactory.getLogger(SingleDbManager.class);
 
-    private final String dbPath;
+    private final String connectionUrl;
     private final ReadWriteLock rwLock;
     private final Semaphore writerWaiting;
 
     private Connection writeConnection;
     private HikariDataSource readDataSource;
     private boolean inWriteMode;
-    private final String readConnectionInitSql;
     private volatile boolean shutdown = false;
     private volatile boolean writeOperationActive = false;
 
-    public IndexConnectionManager(String dbPath) {
-        this.dbPath = dbPath;
+    public SingleDbManager(String connectionUrl) {
+        this.connectionUrl = connectionUrl;
         this.rwLock = new ReentrantReadWriteLock(true);
         this.writerWaiting = new Semaphore(1);
         this.inWriteMode = false;
-        this.readConnectionInitSql = buildReadConnectionInitSql();
     }
 
-    private String buildReadConnectionInitSql() {
-        Properties duckDbProperties = new Properties();
-        duckDbProperties.setProperty("enable_progress_bar", "true");
-        duckDbProperties.setProperty("enable_progress_bar_print", "false");
-        if(Config.get().getDbThreads() != null) {
-            duckDbProperties.setProperty("threads", Config.get().getDbThreads().toString());
-        }
-
-        StringBuilder sql = new StringBuilder();
-        for(String propertyName : duckDbProperties.stringPropertyNames()) {
-            String value = duckDbProperties.getProperty(propertyName);
-            sql.append("SET ").append(propertyName).append(" = '").append(value).append("'; ");
-        }
-
-        File secp256k1ExtensionFile = Storage.getSecp256k1ExtensionFile();
-        sql.append("LOAD '").append(secp256k1ExtensionFile.getAbsolutePath()).append("'; ");
-
-        return sql.toString().trim();
-    }
-
-    public <T> T executeRead(ReadOperation<T> operation) throws SQLException, InterruptedException {
+    public <T> T executeRead(DbManager.ReadOperation<T> operation) throws SQLException, InterruptedException {
         if(shutdown) {
             throw new SQLException("Connection manager is shutting down");
         }
@@ -87,7 +59,7 @@ public class IndexConnectionManager {
         }
     }
 
-    public <T> T executeWrite(WriteOperation<T> operation) throws SQLException, InterruptedException {
+    public <T> T executeWrite(DbManager.WriteOperation<T> operation) throws SQLException, InterruptedException {
         if(shutdown) {
             throw new SQLException("Connection manager is shutting down");
         }
@@ -157,28 +129,7 @@ public class IndexConnectionManager {
             return;
         }
 
-        HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:duckdb:" + dbPath);
-        config.setDriverClassName("org.duckdb.DuckDBDriver");
-        config.addDataSourceProperty("access_mode", "READ_ONLY");
-        config.addDataSourceProperty("allow_unsigned_extensions", "true");
-        config.addDataSourceProperty("jdbc_stream_results", "true");
-        config.addDataSourceProperty("scheduler_process_partial", "true");
-        config.setConnectionInitSql(readConnectionInitSql);
-
-        config.setMaximumPoolSize(10);
-        config.setMinimumIdle(2);
-        config.setConnectionTimeout(30000);
-        config.setIdleTimeout(300000);
-        config.setMaxLifetime(900000);
-        config.setLeakDetectionThreshold(0);
-
-        config.setConnectionTestQuery("SELECT 1");
-        config.setValidationTimeout(5000);
-        config.setPoolName("DuckDB-ReadOnly-Pool");
-
-        readDataSource = new HikariDataSource(config);
-        log.debug("Created read connection pool with max size: " + config.getMaximumPoolSize());
+        readDataSource = createReadDataSource(connectionUrl, 10);
     }
 
     private void createWriteConnection() throws SQLException {
@@ -186,8 +137,7 @@ public class IndexConnectionManager {
             return;
         }
 
-        writeConnection = DriverManager.getConnection("jdbc:duckdb:" + dbPath);
-        log.debug("Created write connection");
+        writeConnection = createWriteConnection(connectionUrl);
     }
 
     private void closeWriteConnection() throws SQLException {
@@ -285,15 +235,5 @@ public class IndexConnectionManager {
 
     public boolean isInWriteMode() {
         return inWriteMode;
-    }
-
-    @FunctionalInterface
-    public interface ReadOperation<T> {
-        T execute(Connection connection) throws SQLException;
-    }
-
-    @FunctionalInterface
-    public interface WriteOperation<T> {
-        T execute(Connection connection) throws SQLException;
     }
 }

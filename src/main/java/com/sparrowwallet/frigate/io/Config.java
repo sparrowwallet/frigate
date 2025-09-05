@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.lang.reflect.Type;
+import java.util.List;
 
 public class Config {
     private static final Logger log = LoggerFactory.getLogger(Config.class);
@@ -20,6 +21,8 @@ public class Config {
     private Integer indexStartHeight;
     private Integer scriptPubKeyCacheSize;
     private Integer dbThreads;
+    private String dbUrl;
+    private List<String> readDbUrls;
 
     private static Config INSTANCE;
 
@@ -134,6 +137,24 @@ public class Config {
 
     public void setDbThreads(Integer dbThreads) {
         this.dbThreads = dbThreads;
+        flush();
+    }
+
+    public String getDbUrl() {
+        return dbUrl;
+    }
+
+    public void setDbUrl(String dbUrl) {
+        this.dbUrl = dbUrl;
+        flush();
+    }
+
+    public List<String> getReadDbUrls() {
+        return readDbUrls;
+    }
+
+    public void setReadDbUrls(List<String> readDbUrls) {
+        this.readDbUrls = readDbUrls;
         flush();
     }
 
