@@ -97,6 +97,7 @@ public class Index {
             return;
         }
 
+        int fromBlockHeight = lastBlockIndexed;
         try {
             lastBlockIndexed = dbManager.executeWrite(connection -> {
                 try(PreparedStatement statement = connection.prepareStatement("INSERT INTO " + TWEAK_TABLE + " VALUES (?, ?, ?, ?)")) {
@@ -127,6 +128,8 @@ public class Index {
                     return blockHeight;
                 }
             });
+
+            Frigate.getEventBus().post(new SilentPaymentsIndexUpdate(fromBlockHeight + 1, lastBlockIndexed, transactions.size()));
         } catch(Exception e) {
             log.error("Error adding to index", e);
         }

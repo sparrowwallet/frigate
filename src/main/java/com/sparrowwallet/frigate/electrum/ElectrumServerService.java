@@ -39,6 +39,10 @@ public class ElectrumServerService {
         this.index = index;
     }
 
+    public Index getIndex() {
+        return index;
+    }
+
     @JsonRpcMethod("server.version")
     public List<String> getServerVersion(@JsonRpcParam("client_name") String clientName, @JsonRpcParam("protocol_version") String[] protocolVersion) throws UnsupportedVersionException {
         String version = protocolVersion.length > 1 ? protocolVersion[1] : protocolVersion[0];

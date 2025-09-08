@@ -8,10 +8,13 @@ import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.SubscriptionStatus;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.Index;
+import com.sparrowwallet.frigate.index.SilentPaymentsIndexUpdate;
+import com.sparrowwallet.frigate.index.TxEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.lang.ref.WeakReference;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
@@ -30,7 +33,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus {
     private boolean connected;
     private boolean headersSubscribed;
     private final Set<String> scriptHashesSubscribed = new HashSet<>();
-    private final Map<String, SilentPaymentScanAddress> silentPaymentsAddressesSubscribed = new HashMap<>();
+    private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new HashMap<>();
 
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, Index index) {
         this.clientSocket = clientSocket;
@@ -91,7 +94,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus {
     }
 
     public void subscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress) {
-        silentPaymentsAddressesSubscribed.put(silentPaymentsScanAddress.toString(), silentPaymentsScanAddress);
+        silentPaymentsAddressesSubscribed.put(silentPaymentsScanAddress.toString(), new SilentPaymentAddressSubscription(silentPaymentsScanAddress));
     }
 
     public void unsubscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress) {
@@ -124,9 +127,21 @@ public class RequestHandler implements Runnable, SubscriptionStatus {
     @Subscribe
     public void silentPaymentsNotification(SilentPaymentsNotification notification) {
         if(isSilentPaymentsAddressSubscribed(notification.subscription().address()) && notification.status() == this) {
+            SilentPaymentAddressSubscription subscription = silentPaymentsAddressesSubscribed.get(notification.subscription().address());
+            subscription.setHighestBlockHeight(notification.history().stream().mapToInt(TxEntry::getHeight).max().orElse(subscription.getHighestBlockHeight()));
+
             ElectrumNotificationTransport electrumNotificationTransport = new ElectrumNotificationTransport(clientSocket);
             JsonRpcClient jsonRpcClient = new JsonRpcClient(electrumNotificationTransport);
             jsonRpcClient.onDemand(ElectrumNotificationService.class).notifySilentPayments(notification.subscription(), notification.progress(), notification.history());
+        }
+    }
+
+    @Subscribe
+    public void silentPaymentsIndexUpdate(SilentPaymentsIndexUpdate update) {
+        for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
+            if(update.fromBlockHeight() > subscription.getHighestBlockHeight()) {
+                electrumServerService.getIndex().startHistoryScan(subscription.getAddress(), update.fromBlockHeight(), null, new WeakReference<>(this));
+            }
         }
     }
 }

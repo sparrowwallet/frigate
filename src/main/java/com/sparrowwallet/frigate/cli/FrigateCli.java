@@ -77,15 +77,17 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
         reader.start();
     }
 
-    public void scan() {
+    public void scan(boolean follow, boolean quiet) {
         JsonRpcClient jsonRpcClient = new JsonRpcClient(getTransport());
         ElectrumClientService electrumClientService = jsonRpcClient.onDemand(ElectrumClientService.class);
         String address = electrumClientService.subscribeSilentPayments(scanPrivateKey, spendPublicKey, start);
 
         try {
-            ScanProgress scanProgress = new ScanProgress(address);
+            ScanProgress scanProgress = new ScanProgress(address, !follow, !quiet);
             getEventBus().register(scanProgress);
-            System.out.println("Scanning address " + address + "...");
+            if(!quiet) {
+                System.out.println("Scanning address " + address + "...");
+            }
             scanProgress.waitForCompletion();
             getEventBus().unregister(scanProgress);
         } catch (InterruptedException e) {
@@ -150,7 +152,7 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
         FrigateCli frigateCli = new FrigateCli(server, args.scanPrivateKey, args.spendPublicKey, args.start);
         frigateCli.promptForMissingValues();
         frigateCli.connect();
-        frigateCli.scan();
+        frigateCli.scan(args.follow, args.quiet);
         frigateCli.close();
     }
 

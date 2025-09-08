@@ -111,7 +111,7 @@ sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2
 
 ### Notifications
 
-Once subscribed, the client will receive notifications as results are returned from the scan with the following signature:
+Once subscribed, the client will receive notifications as results are returned from the scan with the following signature. All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results:
 
 ```
 blockchain.silentpayments.subscribe(subscription, progress, history)
@@ -119,7 +119,7 @@ blockchain.silentpayments.subscribe(subscription, progress, history)
 
 **Result**
 
-A dictionary with the following key/value pairs. All historical results **must** be sent before current (up to date) results:
+A dictionary with the following key/value pairs:
 
 1. A `subscription` JSON object literal containing details of the current subscription:
 - _address_: The silent payment address that has been subscribed to.
@@ -242,7 +242,7 @@ An example configuration looks as follows
 Default values for these entries will be set on first startup.
 The value of `coreAuthType` can either be `COOKIE` or `USERPASS`. 
 Configure `coreDataDir` or `coreAuth` respectively to grant RPC access.
-The value of `startIndexing` can be set to false if the index has already been built and you want to just execute queries against it.
+The value of `startIndexing` can be set to `false` if an index has already been built and you just want to execute queries against it without connecting to Bitcoin Core.
 
 Indexing speed is greatly affected by looking up the scriptPubKeys of spent outputs.
 To improve performance, scriptPubKeys are cached to avoid looking them up again with `getrawtransaction`.
@@ -302,6 +302,12 @@ The scan private key and spend public key, along with the start block height or 
 Enter scan private key: SCAN_PRIVATE_KEY
 Enter spend public key: SPEND_PUBLIC_KEY
 Enter start block height or timestamp (optional, press Enter to skip): 890000
+```
+
+By default the CLI client closes once the initial scan is complete, but it can be configured to `follow` or stay open for incoming updates.
+When in follow mode, results are only printed if transactions are found.
+```shell
+./bin/frigate-cli -f
 ```
 
 ## Building

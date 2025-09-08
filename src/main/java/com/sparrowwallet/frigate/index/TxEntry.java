@@ -29,6 +29,10 @@ public class TxEntry implements Comparable<TxEntry> {
         this.fee = btcFee > 0.0 ? (long)(btcFee * Transaction.SATOSHIS_PER_BITCOIN) : null;
     }
 
+    public int getHeight() {
+        return height;
+    }
+
     @Override
     public boolean equals(Object o) {
         if(this == o) {

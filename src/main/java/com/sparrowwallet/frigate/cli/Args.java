@@ -34,4 +34,10 @@ public class Args {
 
     @Parameter(names = { "--start", "-b" }, description = "Scan start block height or timestamp")
     public Long start;
+
+    @Parameter(names = { "--follow", "-f" }, description = "Keep client open after initial scan to receive additional transaction")
+    public boolean follow;
+
+    @Parameter(names = { "--quiet", "-q" }, description = "Disable printing of the progress bar")
+    public boolean quiet;
 }
