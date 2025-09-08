@@ -1,6 +1,13 @@
+![Frigate logo](https://github.com/sparrowwallet/frigate/raw/refs/heads/master/frigatelogo.png)
+
 # Frigate Electrum Server
  
 Frigate is an experimental Electrum Server testing Silent Payments scanning with ephemeral client keys.
+
+It has three goals:
+1. To provide a proof of concept implementation of the [Remote Scanner](https://github.com/silent-payments/BIP0352-index-server-specification/blob/main/README.md#remote-scanner-ephemeral) approach discussed in the BIP352 Silent Payments Index Server [Specification](https://github.com/silent-payments/BIP0352-index-server-specification/blob/main/README.md) (WIP).
+2. To propose Electrum RPC protocol methods to request and return Silent Payments information from a server.
+3. To demonstrate an efficient "in database" technique of scanning for Silent Payments transactions.
 
 #### This is alpha software, and should not be used in production.
 
@@ -12,12 +19,12 @@ However, this introduces two significant problems:
 The first is one of data gravity.
 For any reasonable scan period, the client must download gigabytes of data in tweaks, block filters and finally some of the blocks themselves.
 All this data needs to be downloaded, parsed and potentially saved to avoid downloading it again, requiring significant resources on the client. 
-One could quickly see wallets use many gigabytes per month in this manner, which is resource intensive in terms of bandwidth, CPU and storage. 
-Compare this to current Electrum clients which may use a few megabytes per month, and it's easy to see how this approach is unlikely to see widespread adoption - it's just too onerous. 
+A client would likely need several gigabytes of data to restore a wallet with historical transactions, which is resource intensive in terms of bandwidth, CPU and storage. 
+Compare this to current Electrum clients which may use just a few megabytes to restore a wallet, and it's easy to see how this approach is unlikely to see widespread adoption - it's just too onerous, particularly for mobile clients.
 
 The second problem is the lack of mempool monitoring, which is not supported with compact block filters. 
 Users rely on to answer the "did you get my transaction?" question.
-The lack of ability to do this can cause user confusion and distrust in the wallet, and education can only go some way in reducing it.
+The lack of ability to do this can cause user confusion and distrust in the wallet, which education can only go some way in reducing.
 
 This project attempts to address these problems using an Electrum protocol styled approach.
 Instead of asking the client to download the required data and perform the scanning, the server performs the scanning locally with an optimized index.
@@ -30,7 +37,12 @@ This is similar to the widely used public Electrum server approach, where the wa
 
 The key problem that BIP 352 introduces with respect to scanning is that much of the computation cannot be done generally ahead of time.
 Instead, for every silent payment address, each transaction in the blockchain must be considered separately to determine if it sends funds to that address.
+The computation involves several cryptographic operations, including two resource intensive EC point multiplication operations on _every_ eligible transaction.
 In order to ensure that client keys are ephemeral and not stored, this computation must be done in a reasonable period of time on millions of transactions.
+This is the key difference between Silent Payments wallets and traditional BIP32 wallets, which can rely on a simple monotonically incrementing derivation path index.
+While Silent Payments provides important advantages in privacy and user experience, this computational burden is the downside that cannot be avoided.
+Any solution addressing the retrieval of Silent Payments transactions will eventually be bounded by the performance of EC point multiplication.
+For best performance and user experience this should be done as efficiently as possible, and therefore as close the source data as possible.
 
 In order to achieve this, Frigate addresses the problem of data gravity directly.
 Like most light client silent payment services, it builds an index of the data that can be pre-computed, generally known as a tweak index.
@@ -58,7 +70,7 @@ This allows Frigate to perform functions such as
 ```sql
 SELECT secp256k1_ec_pubkey_tweak_mul(tweak_key, scalar);
 ```
-which allows computation to happen as close to the tweak data as possible.
+which allows the EC point computation to happen as close to the tweak data as possible.
 
 With these extensions, Frigate performs a query as follows:
 ```sql
@@ -107,7 +119,7 @@ blockchain.silentpayments.subscribe(subscription, progress, history)
 
 **Result**
 
-A dictionary with the following key/value pairs:
+A dictionary with the following key/value pairs. All historical results **must** be sent before current (up to date) results:
 
 1. A `subscription` JSON object literal containing details of the current subscription:
 - _address_: The silent payment address that has been subscribed to.
@@ -168,15 +180,46 @@ sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2
 
 ## Performance
 
-The scanning query is essentially CPU bound.
+The scanning query is essentially CPU bound, mostly around EC point multiplication.
 [DuckDB parallelizes](https://duckdb.org/docs/stable/guides/performance/how_to_tune_workloads#parallelism-multi-core-processing) the workload based on row groups, with each row group containing 122,880 rows.
 It will by default configure itself to use all the available cores on the server it is running.
 The behaviour can be configured in the Frigate configuration file (see `dbThreads`).
 
-An example benchmark is scanning the entire tweak database for the signet chain as of 21 August 2025.
-This query takes just over 2 minutes on a Macbook Pro M1. 
+The following set of benchmarks was generated on a M1 Macbook Pro with 10 available CPUs, scanning mainnet to a block height of 911434 with a database size of ~13Gb.
+**Note that no cut-through or dust filter has been used.**
 
-However, it is more typical for queries to be limited to a range of blocks, usually from the date the wallet was created until the current block tip.
+|                       |   Blocks  |   Start   | Transactions |   Time       | Transactions/sec |
+|-----------------------|-----------|-----------|--------------|--------------|------------------|
+|   2 hours             |   12      |   911422  | 8961         |   474ms      | 18905            |
+|   1 day               |   144     |   911290  | 149059       |   5s 6ms     | 29776            |
+|   1 week              |   1008    |   910426  | 1143906      |   7s 992ms   | 143131           |
+|   2 weeks             |   2016    |   909418  | 2349028      |   17s 408ms  | 134940           |
+|   4 weeks             |   4032    |   907402  | 5002030      |   36s 796ms  | 135940           |
+|   8 weeks             |   8064    |   903370  | 9441899      |   1m 6s      | 142101           |
+|   16 weeks            |   16128   |   895306  | 15910877     |   1m 51s     | 143269           |
+|   32 weeks            |   32256   |   879178  | 32666940     |   3m 47s     | 143638           |
+|   64 weeks            |   64512   |   846922  | 77427166     |   8m 55s     | 144606           |
+|   Taproot Activation  |   201802  |   709632  | 153651412    |   17m 25s    | 147043           |
+
+Higher performance on the longer periods is possible by increasing the number of CPUs.
+The following set of benchmarks was generated on a 32 Intel CPU VPS server using the same tweak database:
+
+|                    |   Blocks  |   Start   | Transactions | Time      | Transactions/sec |
+|--------------------|-----------|-----------|--------------|-----------|------------------|
+| 2 hours            |   12      |   911422  | 8961         | 1s 345ms  | 6662             |
+| 1 day              |   144     |   911290  | 149059       | 7s 703ms  | 19351            |
+| 1 week             |   1008    |   910426  | 1143906      | 9s 625ms  | 118847           |
+| 2 weeks            |   2016    |   909418  | 2349028      | 14s 714ms | 159646           |
+| 4 weeks            |   4032    |   907402  | 5002030      | 27s 666ms | 180801           |
+| 8 weeks            |   8064    |   903370  | 9441899      | 44s 979ms | 209918           |
+| 16 weeks           |   16128   |   895306  | 15910877     | 1m 20s    | 199695           |
+| 32 weeks           |   32256   |   879178  | 32666940     | 2m 30s    | 217561           |
+| 64 weeks           |   64512   |   846922  | 77427166     | 5m 45s    | 224315           |
+| Taproot Activation |   201802  |   709632  | 153651412    | 11m 34s   | 221502           |
+
+Conducting simultaneous scans slows each scan linearly. 
+Further performance improvements (or handling additional clients) may be performed by scaling out across [multiple read-only replicas of the database](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/read-scaling/).
+It is also possible to consider hardware acceleration techniques such as [HSMs](https://docs.aws.amazon.com/cloudhsm/latest/userguide/performance.html), [cryptographic coprocessors](https://developer.arm.com/Processors/CryptoCell-310) or GPU acceleration.
 
 ## Configuration
 
@@ -190,10 +233,10 @@ An example configuration looks as follows
   "coreAuthType": "COOKIE",
   "coreDataDir": "/home/bitcoin/.bitcoin",
   "coreAuth": "bitcoin:password",
+  //Add this to reduce CPU load: "dbThreads": 2,
   "startIndexing": true,
   "indexStartHeight": 0,
   "scriptPubKeyCacheSize": 10000000
-  //Add this to reduce CPU load: "dbThreads": 2
 }
 ```
 Default values for these entries will be set on first startup.
@@ -217,6 +260,11 @@ The Frigate server may be started as follows:
 ./bin/frigated
 ```
 
+or on macOS:
+```shell
+./Frigate.app/Contents/MacOS/Frigate
+```
+
 To start with a different network, use the `-n` parameter:
 ```shell
 ./bin/frigated -n signet
@@ -232,6 +280,11 @@ The full range of options can be queried with:
 Frigate also ships a CLI tool called `frigate-cli` to allow easy access to the Electrum RPC.
 ```shell
 ./bin/frigate-cli
+```
+
+or on macOS:
+```shell
+./Frigate.app/Contents/MacOS/frigate-cli
 ```
 
 It uses similar arguments, for example:

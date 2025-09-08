@@ -61,6 +61,14 @@ jlink {
         imageName = os.isMacOsX() ? 'Frigate' : 'frigate'
         appVersion = "${version}"
         skipInstaller = !os.isLinux()
+        if(os.isWindows()) {
+            imageOptions = ['--win-console', '--resource-dir', 'src/main/deploy/package/windows/']
+        } else if(os.isMacOsX()) {
+            imageOptions = ['--icon', 'src/main/deploy/package/macos/frigate.icns', '--resource-dir', 'src/main/deploy/package/macos/']
+        } else if(os.isLinux()) {
+            imageOptions = ['--resource-dir', 'src/main/deploy/package/linux/', '--icon', 'src/main/deploy/package/linux/frigate.png']
+            installerOptions = ['--linux-rpm-license-type', 'ASL 2.0', '--linux-deb-maintainer', 'mail@sparrowwallet.com']
+        }
     }
 }
 
