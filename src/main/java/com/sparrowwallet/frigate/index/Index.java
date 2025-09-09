@@ -132,6 +132,23 @@ public class Index {
         }
     }
 
+    public void removeFromIndex(int startHeight) {
+        if(dbManager.isShutdown()) {
+            return;
+        }
+
+        try {
+            dbManager.executeWrite(connection -> {
+                try(PreparedStatement statement = connection.prepareStatement("DELETE FROM " + TWEAK_TABLE + " WHERE height >= ?")) {
+                    statement.setInt(1, startHeight);
+                    return statement.execute();
+                }
+            });
+        } catch(Exception e) {
+            log.error("Error removing from index", e);
+        }
+    }
+
     public void removeFromIndex(Set<Sha256Hash> txIds) {
         if(dbManager.isShutdown()) {
             return;

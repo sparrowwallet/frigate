@@ -12,6 +12,7 @@ import com.sparrowwallet.frigate.electrum.ElectrumBlockHeader;
 import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.CoreAuthType;
+import com.sparrowwallet.frigate.io.RecentBlocksMap;
 import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,7 @@ public class BitcoindClient {
     private static final Logger log = LoggerFactory.getLogger(BitcoindClient.class);
 
     public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 10000000;
+    private static final int MAX_REORG_DEPTH = 10;
 
     private final JsonRpcClient jsonRpcClient;
     private final Timer timer = new Timer(true);
@@ -47,8 +49,8 @@ public class BitcoindClient {
     private boolean stopped;
 
     private final Map<HashIndex, byte[]> scriptPubKeyCache;
-
     private final Set<Sha256Hash> mempoolTxIds = new HashSet<>();
+    private final RecentBlocksMap recentBlocksMap = new RecentBlocksMap(MAX_REORG_DEPTH);
 
     public BitcoindClient(Index blocksIndex, Index mempoolIndex) {
         BitcoindTransport bitcoindTransport;
@@ -139,6 +141,9 @@ public class BitcoindClient {
 
         for(int i = blocksIndex.getLastBlockIndexed() + 1; i <= tip.height(); i++) {
             String blockHash = getBitcoindService().getBlockHash(i);
+            if(i > tip.height() - MAX_REORG_DEPTH) {
+                recentBlocksMap.put(i, blockHash);
+            }
             String blockHex = (String)bitcoindService.getBlock(blockHash, 0);
             Block block = new Block(hexFormat.parseHex(blockHex));
 
@@ -276,7 +281,26 @@ public class BitcoindClient {
                 if(lastBlock != null && tip != null) {
                     String blockhash = getBitcoindService().getBlockHash(tip.height());
                     if(!lastBlock.equals(blockhash)) {
-                        log.info("Reorg detected, block height " + tip.height() + " was " + lastBlock + " and now is " + blockhash);
+                        int reorgStartHeight = tip.height();
+                        for(; reorgStartHeight >= tip.height() - MAX_REORG_DEPTH; reorgStartHeight--) {
+                            String indexedBlockHash = recentBlocksMap.get(reorgStartHeight);
+                            String reorgBlockhash = getBitcoindService().getBlockHash(reorgStartHeight);
+                            if(indexedBlockHash == null || indexedBlockHash.equals(reorgBlockhash)) {
+                                break;
+                            }
+                        }
+
+                        int blocksReorged = tip.height() - reorgStartHeight + 1;
+                        if(blocksReorged > 1) {
+                            log.info("Reorg detected of last block, block height " + tip.height() + " was " + lastBlock + " and now is " + blockhash);
+                        } else {
+                            log.info("Reorg detected of last " + blocksReorged + " blocks, block height " + tip.height() + " was " + lastBlock + " and now is " + blockhash);
+                        }
+
+                        Frigate.getEventBus().post(new BlockReorgEvent(reorgStartHeight));
+                        blocksIndex.removeFromIndex(reorgStartHeight);
+                        updateBlocksIndex();
+
                         lastBlock = null;
                     }
                 }

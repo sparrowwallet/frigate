@@ -8,6 +8,7 @@ import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.SubscriptionStatus;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
+import com.sparrowwallet.frigate.bitcoind.BlockReorgEvent;
 import com.sparrowwallet.frigate.index.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -163,6 +164,13 @@ public class RequestHandler implements Runnable, SubscriptionStatus {
     public void silentPaymentsMempoolIndexRemoved(SilentPaymentsMempoolIndexRemoved removed) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
             subscription.getMempoolTxids().removeAll(removed.getTxids());
+        }
+    }
+
+    @Subscribe
+    public void blockReorgEvent(BlockReorgEvent event) {
+        for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
+            subscription.setHighestBlockHeight(event.startHeight() - 1);
         }
     }
 }
