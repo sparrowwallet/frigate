@@ -57,7 +57,7 @@ Frigate stores this data in a single table with the following schema:
 | `tweak_key`  | BLOB         |
 | `outputs`    | LIST(BIGINT) |
 
-The `txid` and `tweak_key` values are 32 byte BLOBS. 
+The `txid` and `tweak_key` values are 32 and 33 byte BLOBS respectively. 
 The `outputs` value is a list of 8 byte integers, each representing the first 8 bytes of the x-value of the Taproot output public key.
 
 On startup, Frigate connects to the configured Bitcoin Core RPC, downloads blocks from the configured block height (or from Taproot activation on mainnet) and adds entries to the table.
