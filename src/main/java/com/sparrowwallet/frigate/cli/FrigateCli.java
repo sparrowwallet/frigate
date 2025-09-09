@@ -4,13 +4,17 @@ import com.beust.jcommander.JCommander;
 import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
 import com.google.common.eventbus.EventBus;
 import com.google.common.net.HostAndPort;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.sparrowwallet.drongo.Drongo;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.Frigate;
+import com.sparrowwallet.frigate.index.TweakEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Locale;
 import java.util.Scanner;
 
@@ -23,20 +27,27 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
     private String scanPrivateKey;
     private String spendPublicKey;
     private Long start;
+    private Integer blockHeight;
 
     private static ElectrumTransport transport;
     private Thread reader;
 
     private static final EventBus EVENT_BUS = new EventBus();
 
-    public FrigateCli(HostAndPort server, String scanPrivateKey, String spendPublicKey, Long start) {
+    public FrigateCli(HostAndPort server, String scanPrivateKey, String spendPublicKey, Long start, Integer blockHeight) {
         this.server = server;
         this.scanPrivateKey = scanPrivateKey;
         this.spendPublicKey = spendPublicKey;
         this.start = start;
+        this.blockHeight = blockHeight;
     }
 
     public void promptForMissingValues() {
+        // Skip prompting if we're in tweaks mode (blockHeight specified)
+        if(blockHeight != null) {
+            return;
+        }
+
         boolean requestStart = (scanPrivateKey == null && spendPublicKey == null);
         Scanner scanner = new Scanner(System.in);
 
@@ -95,6 +106,22 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
         }
     }
 
+    public void queryTweaks(Integer blockHeight) {
+        JsonRpcClient jsonRpcClient = new JsonRpcClient(getTransport());
+        ElectrumClientService electrumClientService = jsonRpcClient.onDemand(ElectrumClientService.class);
+        
+        try {
+            Collection<TweakEntry> tweaks = electrumClientService.getTweaksByHeight(blockHeight);
+            GsonBuilder gsonBuilder = new GsonBuilder();
+            Gson gson = gsonBuilder.setPrettyPrinting().disableHtmlEscaping().create();
+            gson.toJson(tweaks, System.out);
+            System.out.println();
+        } catch (Exception e) {
+            getLogger().error("Error querying tweaks for height " + blockHeight, e);
+            System.exit(1);
+        }
+    }
+
     public void close() {
         try {
             transport.close();
@@ -149,10 +176,18 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
 
         HostAndPort server = HostAndPort.fromString(args.host == null ? "127.0.0.1" : args.host);
 
-        FrigateCli frigateCli = new FrigateCli(server, args.scanPrivateKey, args.spendPublicKey, args.start);
+        FrigateCli frigateCli = new FrigateCli(server, args.scanPrivateKey, args.spendPublicKey, args.start, args.blockHeight);
         frigateCli.promptForMissingValues();
         frigateCli.connect();
-        frigateCli.scan(args.follow, args.quiet);
+        
+        if(args.blockHeight != null) {
+            // Tweaks query mode
+            frigateCli.queryTweaks(args.blockHeight);
+        } else {
+            // Normal Silent Payments scan mode
+            frigateCli.scan(args.follow, args.quiet);
+        }
+        
         frigateCli.close();
     }
 

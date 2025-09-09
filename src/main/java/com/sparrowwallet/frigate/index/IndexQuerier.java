@@ -26,6 +26,10 @@ public class IndexQuerier {
         this.mempoolIndex = mempoolIndex;
     }
 
+    public List<TweakEntry> getTweaksByHeight(int blockHeight) {
+        return blocksIndex.getTweaksByHeight(blockHeight);
+    }
+
     private final ExecutorService queryPool = Executors.newFixedThreadPool(10, r -> {
         ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQuery-%d").build();
         Thread t = namedThreadFactory.newThread(r);
