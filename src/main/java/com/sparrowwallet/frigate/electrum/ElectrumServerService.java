@@ -217,7 +217,7 @@ public class ElectrumServerService {
         return silentPaymentScanAddress.getAddress();
     }
 
-    @JsonRpcMethod("blockchain.block.tweaks")
+    @JsonRpcMethod("blockchain.silentpayments.tweaks")
     public Collection<TweakEntry> getTweaksByHeight(@JsonRpcParam("block_height") int blockHeight) throws BitcoindIOException, BlockNotFoundException {
         try {
             return indexQuerier.getTweaksByHeight(blockHeight);

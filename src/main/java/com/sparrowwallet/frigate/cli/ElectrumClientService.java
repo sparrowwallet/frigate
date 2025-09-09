@@ -17,6 +17,6 @@ public interface ElectrumClientService {
     @JsonRpcMethod("blockchain.silentpayments.subscribe")
     String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Long start);
 
-    @JsonRpcMethod("blockchain.block.tweaks")
+    @JsonRpcMethod("blockchain.silentpayments.tweaks")
     Collection<TweakEntry> getTweaksByHeight(@JsonRpcParam("block_height") int blockHeight);
 }

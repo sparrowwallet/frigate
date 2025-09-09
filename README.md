@@ -193,6 +193,36 @@ The silent payment address that has been unsubscribed. This should cancel any sc
 sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv
 ```
 
+### blockchain.silentpayments.tweaks
+
+**Signature**
+```
+blockchain.silentpayments.tweaks(block_height)
+```
+
+- _block_height_: An integer representing the block height to query tweaks for.
+
+**Result**
+
+An array of tweak entries for all Silent Payments eligible transactions found in the specified block. Each entry contains the transaction ID and the corresponding tweak key.
+
+**Result Example**
+
+```json
+[
+  {
+    "txid": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412",
+    "tweak": "02a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef12345678"
+  },
+  {
+    "txid": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403", 
+    "tweak": "03b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890"
+  }
+]
+```
+
+This method provides direct access to the raw tweak data stored in the database for a specific block height, which can be useful for debugging, analysis, or building custom Silent Payments scanning tools. Unlike the subscription-based methods, this endpoint does not require cryptographic keys and simply returns the stored tweak information.
+
 ## Performance
 
 The scanning query is essentially CPU bound, mostly around EC point multiplication.
@@ -335,6 +365,29 @@ When in follow mode, results are only printed if transactions are found.
 The full range of options can be queried with:
 ```shell
 ./bin/frigate-cli -h
+```
+
+#### Querying Block Tweaks
+
+The CLI can also be used to query tweaks for a specific block height using the `--height` parameter. This mode bypasses Silent Payments scanning and directly returns the raw tweak data from the database:
+
+```shell
+./bin/frigate-cli --height 890000
+```
+
+This will output a JSON array of all tweaks found in block 890000:
+```json
+[
+  {
+    "txid": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412",
+    "tweak": "02a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef12345678"
+  }
+]
+```
+
+The tweaks query mode can be combined with network parameter:
+```shell
+./bin/frigate-cli --height 890000 --network signet
 ```
 
 ## Building
