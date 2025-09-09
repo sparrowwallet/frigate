@@ -23,14 +23,14 @@ A client would likely need several gigabytes of data to restore a wallet with hi
 Compare this to current Electrum clients which may use just a few megabytes to restore a wallet, and it's easy to see how this approach is unlikely to see widespread adoption - it's just too onerous, particularly for mobile clients.
 
 The second problem is the lack of mempool monitoring, which is not supported with compact block filters. 
-Users rely on to answer the "did you get my transaction?" question.
+Users rely on mempool monitoring to answer the "did you get my transaction?" question.
 The lack of ability to do this can cause user confusion and distrust in the wallet, which education can only go some way in reducing.
 
 This project attempts to address these problems using an Electrum protocol styled approach.
 Instead of asking the client to download the required data and perform the scanning, the server performs the scanning locally with an optimized index.
 This is the [Remote Scanner](https://github.com/silent-payments/BIP0352-index-server-specification/blob/main/README.md#remote-scanner-ephemeral) approach discussed in the BIP352 Silent Payments Index Server [Specification](https://github.com/silent-payments/BIP0352-index-server-specification/blob/main/README.md) (WIP).
 It should be noted that both the scan private key and the spend public key must be provided to the server in this approach.
-While this does have a privacy implication, the keys are not stored and only held by the server ephemerally for the client session.
+While this does have a privacy implication, the keys are not stored and only held by the server ephemerally (in RAM) for duration of the client session.
 This is similar to the widely used public Electrum server approach, where the wallet addresses are shared ephemerally with a public server. 
 
 ## Approach
@@ -39,6 +39,7 @@ The key problem that BIP 352 introduces with respect to scanning is that much of
 Instead, for every silent payment address, each transaction in the blockchain must be considered separately to determine if it sends funds to that address.
 The computation involves several cryptographic operations, including two resource intensive EC point multiplication operations on _every_ eligible transaction.
 In order to ensure that client keys are ephemeral and not stored, this computation must be done in a reasonable period of time on millions of transactions.
+
 This is the key difference between Silent Payments wallets and traditional BIP32 wallets, which can rely on a simple monotonically incrementing derivation path index.
 While Silent Payments provides important advantages in privacy and user experience, this computational burden is the downside that cannot be avoided.
 Any solution addressing the retrieval of Silent Payments transactions will eventually be bounded by the performance of EC point multiplication.
@@ -97,7 +98,7 @@ blockchain.silentpayments.subscribe(scan_private_key, spend_public_key, start)
 
 - _scan_private_key_: A 64 character string containing the hex of the scan private key.
 - _spend_public_key_: A 66 character string containing the hex of the spend public key.
-- _start_: (Optional) Block height or timestamp to start scanning from. Values above 500,000 are treated as seconds from the start of the epoch.
+- _start_: (Optional) Block height or timestamp to start scanning from. Values above 500,000,000 are treated as seconds from the start of the epoch.
 
 **Result**
 
@@ -105,7 +106,7 @@ The silent payment address that has been subscribed.
 
 **Result Example**
 
-```json
+```
 sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv
 ```
 
@@ -125,7 +126,7 @@ A dictionary with the following key/value pairs:
 
 1. A `subscription` JSON object literal containing details of the current subscription:
 - _address_: The silent payment address that has been subscribed to.
-- _startHeight_: The block height from which the subscription scan was started.
+- _start_height_: The block height from which the subscription scan was started.
 
 2. A `progress` key/value pair indicating the progress of a historical scan:
 - _progress_: A floating point value between `0.0` and `1.0`. Will be `1.0` for all current (up to date) results.
@@ -140,7 +141,7 @@ A dictionary with the following key/value pairs:
 {
   "subscription": {
     "address": "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
-    "startHeight": 882000
+    "start_height": 882000
   },
   "progress": 1.0,
   "history": [
@@ -161,9 +162,9 @@ A dictionary with the following key/value pairs:
 ```
 
 It is recommended that servers implementing this protocol send history results incrementally as the historical scan progresses.
-In addition, a maximum page size of 100 history items is suggested.
+In addition, a maximum page size of 100 is suggested when sending historical transactions.
 This will avoid transmission issues with large wallets that have many transactions, while providing the client with regular progress updates.
-In the case of block reorgs, the server should rescan all existing subscriptions from the reorg block height and send any history (if found) to the client with `startHeight` set to this height.
+In the case of block reorgs, the server should rescan all existing subscriptions from the reorg-ed block height and send any history (if found) to the client.
 All found mempool transactions should be sent on the initial subscription, but thereafter previously sent mempool transactions should not be resent.
 
 Clients should retrieve the transactions listed in the history with `blockchain.transaction.get` and subscribe to all owned outputs with `blockchain.scripthash.subscribe`. 
@@ -188,7 +189,7 @@ The silent payment address that has been unsubscribed. This should cancel any sc
 
 **Result Example**
 
-```json
+```
 sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv
 ```
 
@@ -216,7 +217,7 @@ The following set of benchmarks was generated on a M1 Macbook Pro with 10 availa
 |   Taproot Activation  |   201802  |   709632  | 153651412    |   17m 25s    | 147043           |
 
 Higher performance on the longer periods is possible by increasing the number of CPUs.
-The following set of benchmarks was generated on a 32 Intel CPU VPS server using the same tweak database:
+The following set of benchmarks was generated on an Intel server with 32 cores using the same tweak database:
 
 |                    |   Blocks  |   Start   | Transactions | Time      | Transactions/sec |
 |--------------------|-----------|-----------|--------------|-----------|------------------|
@@ -231,7 +232,7 @@ The following set of benchmarks was generated on a 32 Intel CPU VPS server using
 | 64 weeks           |   64512   |   846922  | 77427166     | 5m 45s    | 224315           |
 | Taproot Activation |   201802  |   709632  | 153651412    | 11m 34s   | 221502           |
 
-Conducting simultaneous scans slows each scan linearly. 
+Multiple clients conducting simultaneous scans slows each scan linearly. 
 Further performance improvements (or handling additional clients) may be performed by scaling out across [multiple read-only replicas of the database](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/read-scaling/).
 It is also possible to consider hardware acceleration techniques such as [HSMs](https://docs.aws.amazon.com/cloudhsm/latest/userguide/performance.html), [cryptographic coprocessors](https://developer.arm.com/Processors/CryptoCell-310) or GPU acceleration.
 
@@ -247,12 +248,12 @@ An example configuration looks as follows
   "coreAuthType": "COOKIE",
   "coreDataDir": "/home/bitcoin/.bitcoin",
   "coreAuth": "bitcoin:password",
-  //Add this to reduce CPU load: "dbThreads": 2,
   "startIndexing": true,
   "indexStartHeight": 0,
   "scriptPubKeyCacheSize": 10000000
 }
 ```
+
 Default values for these entries will be set on first startup.
 The value of `coreAuthType` can either be `COOKIE` or `USERPASS`. 
 Configure `coreDataDir` or `coreAuth` respectively to grant RPC access.
@@ -264,8 +265,15 @@ The `scriptPubKeyCacheSize` limits the number of scriptPubKeys cached during ind
 The default value leads to a total application memory size of around 4Gb. 
 This value can be increased or decreased depending on available RAM. 
 
-The DuckDB database is stored in a `db` subfolder in the same directory, in a file called `duckdb`.
+The DuckDB database is stored in a `db` subfolder in the same directory, in a file called `frigate.duckdb`.
 DuckDB databases can be transferred between different operating systems, and should survive unclean shutdowns.
+
+To reduce CPU load while scanning, add an entry to reduce the number of cores made available to DuckDB, for example:
+```json
+{
+  "dbThreads": 2
+}
+```
 
 ## Usage
 
@@ -322,6 +330,11 @@ By default the CLI client closes once the initial scan is complete, but it can b
 When in follow mode, results are only printed if transactions are found.
 ```shell
 ./bin/frigate-cli -f
+```
+
+The full range of options can be queried with:
+```shell
+./bin/frigate-cli -h
 ```
 
 ## Building
