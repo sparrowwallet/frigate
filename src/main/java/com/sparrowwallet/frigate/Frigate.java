@@ -18,7 +18,7 @@ import java.util.Locale;
 
 public class Frigate {
     public static final String SERVER_NAME = "Frigate";
-    public static final String SERVER_VERSION = "0.0.1";
+    public static final String SERVER_VERSION = "1.0.0";
     public static final String APP_HOME_PROPERTY = "frigate.home";
     public static final String NETWORK_ENV_PROPERTY = "FRIGATE_NETWORK";
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
