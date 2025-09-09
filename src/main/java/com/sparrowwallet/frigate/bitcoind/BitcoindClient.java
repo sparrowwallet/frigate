@@ -44,8 +44,6 @@ public class BitcoindClient {
     private final Condition syncingCondition = syncingLock.newCondition();
     private boolean syncing;
 
-    private final Lock indexingLock = new ReentrantLock();
-
     private boolean stopped;
 
     private final Map<HashIndex, byte[]> scriptPubKeyCache;

@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 
 public class Index {
     private static final Logger log = LoggerFactory.getLogger(Index.class);
-    public static final String DB_FILENAME = "duckdb";
+    public static final String DEFAULT_DB_FILENAME = "frigate.duckdb";
     private static final String TWEAK_TABLE = "tweak";
     public static final int HISTORY_PAGE_SIZE = 100;
 
@@ -45,7 +45,7 @@ public class Index {
             if(dbUrl != null && readDbUrls != null && !readDbUrls.isEmpty()) {
                 dbManager = new ScalingDbManager(dbUrl, readDbUrls);
             } else if(dbUrl == null) {
-                File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
+                File dbFile = new File(Storage.getFrigateDbDir(), DEFAULT_DB_FILENAME);
                 dbManager = new SingleDbManager(DbManager.DB_PREFIX + dbFile.getAbsolutePath());
             } else {
                 dbManager = new SingleDbManager(dbUrl);
