@@ -2,7 +2,7 @@ package com.sparrowwallet.frigate.electrum;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
-import com.sparrowwallet.frigate.index.Index;
+import com.sparrowwallet.frigate.index.IndexQuerier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,7 +18,7 @@ public class ElectrumServerRunnable implements Runnable {
     public static final int DEFAULT_PORT = 57001;
 
     private final BitcoindClient bitcoindClient;
-    private final Index index;
+    private final IndexQuerier indexQuerier;
 
     protected ServerSocket serverSocket = null;
     protected boolean stopped = false;
@@ -30,9 +30,9 @@ public class ElectrumServerRunnable implements Runnable {
         return t;
     });
 
-    public ElectrumServerRunnable(BitcoindClient bitcoindClient, Index index) {
+    public ElectrumServerRunnable(BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
         this.bitcoindClient = bitcoindClient;
-        this.index = index;
+        this.indexQuerier = indexQuerier;
         openServerSocket();
     }
 
@@ -57,7 +57,7 @@ public class ElectrumServerRunnable implements Runnable {
                 }
                 throw new RuntimeException("Error accepting client connection", e);
             }
-            RequestHandler requestHandler = new RequestHandler(clientSocket, bitcoindClient, index);
+            RequestHandler requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier);
             this.requestPool.execute(requestHandler);
         }
 

@@ -15,7 +15,7 @@ import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.bitcoind.BlockStats;
 import com.sparrowwallet.frigate.bitcoind.FeeInfo;
 import com.sparrowwallet.frigate.bitcoind.MempoolInfo;
-import com.sparrowwallet.frigate.index.Index;
+import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.frigate.index.TxEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,16 +31,16 @@ public class ElectrumServerService {
 
     private final BitcoindClient bitcoindClient;
     private final RequestHandler requestHandler;
-    private final Index index;
+    private final IndexQuerier indexQuerier;
 
-    public ElectrumServerService(BitcoindClient bitcoindClient, RequestHandler requestHandler, Index index) {
+    public ElectrumServerService(BitcoindClient bitcoindClient, RequestHandler requestHandler, IndexQuerier indexQuerier) {
         this.bitcoindClient = bitcoindClient;
         this.requestHandler = requestHandler;
-        this.index = index;
+        this.indexQuerier = indexQuerier;
     }
 
-    public Index getIndex() {
-        return index;
+    public IndexQuerier getIndexQuerier() {
+        return indexQuerier;
     }
 
     @JsonRpcMethod("server.version")
@@ -203,7 +203,7 @@ public class ElectrumServerService {
         requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress);
 
         int startHeight = getStartHeight(start);
-        index.startHistoryScan(silentPaymentScanAddress, startHeight, null, new WeakReference<>(requestHandler));
+        indexQuerier.startHistoryScan(silentPaymentScanAddress, startHeight, null, new WeakReference<>(requestHandler));
 
         return silentPaymentScanAddress.getAddress();
     }

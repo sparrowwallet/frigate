@@ -7,6 +7,7 @@ import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.electrum.ElectrumServerRunnable;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.Index;
+import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Storage;
 import org.slf4j.Logger;
@@ -20,10 +21,13 @@ public class Frigate {
     public static final String SERVER_VERSION = "0.0.1";
     public static final String APP_HOME_PROPERTY = "frigate.home";
     public static final String NETWORK_ENV_PROPERTY = "FRIGATE_NETWORK";
+    private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
+    private static final int TESTNET_TAPROOT_ACTIVATION_HEIGHT = 0;
 
     private static final EventBus EVENT_BUS = new EventBus();
 
-    private Index index;
+    private Index blocksIndex;
+    private Index mempoolIndex;
     private BitcoindClient bitcoindClient;
     private ElectrumServerRunnable electrumServer;
 
@@ -32,8 +36,14 @@ public class Frigate {
     public void start() {
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
 
-        index = new Index();
-        index.initialize();
+        Integer startHeight = Config.get().getIndexStartHeight();
+        if(startHeight == null) {
+            startHeight = Network.get() == Network.MAINNET ? MAINNET_TAPROOT_ACTIVATION_HEIGHT : TESTNET_TAPROOT_ACTIVATION_HEIGHT;
+            Config.get().setIndexStartHeight(startHeight);
+        }
+
+        blocksIndex = new Index(startHeight, false);
+        mempoolIndex = new Index(0, true);
 
         Boolean startIndexing = Config.get().isStartIndexing();
         if(startIndexing == null) {
@@ -42,11 +52,11 @@ public class Frigate {
         }
 
         if(startIndexing) {
-            bitcoindClient = new BitcoindClient(index);
+            bitcoindClient = new BitcoindClient(blocksIndex, mempoolIndex);
             bitcoindClient.initialize();
         }
 
-        electrumServer = new ElectrumServerRunnable(bitcoindClient, index);
+        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex));
         Thread electrumServerThread = new Thread(electrumServer, "Frigate Electrum Server");
         electrumServerThread.setDaemon(false);
         electrumServerThread.start();
@@ -59,8 +69,11 @@ public class Frigate {
     }
 
     public void stop() {
-        if(index != null) {
-            index.close();
+        if(blocksIndex != null) {
+            blocksIndex.close();
+        }
+        if(mempoolIndex != null) {
+            mempoolIndex.close();
         }
         if(bitcoindClient != null) {
             bitcoindClient.stop();

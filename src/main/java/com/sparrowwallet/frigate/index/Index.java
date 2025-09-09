@@ -1,7 +1,6 @@
 package com.sparrowwallet.frigate.index;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.drongo.Utils;
 import com.sparrowwallet.drongo.protocol.*;
 import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
@@ -24,44 +23,34 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 public class Index {
     private static final Logger log = LoggerFactory.getLogger(Index.class);
     public static final String DB_FILENAME = "duckdb";
     private static final String TWEAK_TABLE = "tweak";
     public static final int HISTORY_PAGE_SIZE = 100;
-    public static final double PROGRESS_COMPLETE = 1.0d;
 
-    private DbManager dbManager;
-
-    private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
-    private static final int TESTNET_TAPROOT_ACTIVATION_HEIGHT = 0;
+    private final DbManager dbManager;
     private int lastBlockIndexed = -1;
 
-    private final ExecutorService queryPool = Executors.newFixedThreadPool(10, r -> {
-        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQuery-%d").build();
-        Thread t = namedThreadFactory.newThread(r);
-        t.setDaemon(true);
-        return t;
-    });
-
-    public void initialize() {
-        Integer startHeight = Config.get().getIndexStartHeight();
-        if(startHeight == null) {
-            startHeight = Network.get() == Network.MAINNET ? MAINNET_TAPROOT_ACTIVATION_HEIGHT : TESTNET_TAPROOT_ACTIVATION_HEIGHT;
-            Config.get().setIndexStartHeight(startHeight);
-        }
+    public Index(int startHeight, boolean inMemory) {
         lastBlockIndexed = Math.max(lastBlockIndexed, startHeight - 1);
 
-        String dbUrl = Config.get().getDbUrl();
-        List<String> readDbUrls = Config.get().getReadDbUrls();
-        if(dbUrl != null && readDbUrls != null && !readDbUrls.isEmpty()) {
-            dbManager = new ScalingDbManager(dbUrl, readDbUrls);
-        } else if(dbUrl == null) {
-            File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
-            dbUrl = DbManager.DB_PREFIX + dbFile.getAbsolutePath();
+        if(inMemory) {
+            dbManager = new MemoryDbManager();
+        } else {
+            String dbUrl = Config.get().getDbUrl();
+            List<String> readDbUrls = Config.get().getReadDbUrls();
+            if(dbUrl != null && readDbUrls != null && !readDbUrls.isEmpty()) {
+                dbManager = new ScalingDbManager(dbUrl, readDbUrls);
+            } else if(dbUrl == null) {
+                File dbFile = new File(Storage.getFrigateDbDir(), DB_FILENAME);
+                dbManager = new SingleDbManager(DbManager.DB_PREFIX + dbFile.getAbsolutePath());
+            } else {
+                dbManager = new SingleDbManager(dbUrl);
+            }
         }
-        dbManager = new SingleDbManager(dbUrl);
 
         try {
             dbManager.executeWrite(connection -> {
@@ -123,24 +112,51 @@ public class Index {
                     }
 
                     statement.executeBatch();
-                    log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
+                    if(fromBlockHeight < 0) {
+                        log.info("Indexed " + transactions.size() + " mempool transactions");
+                    } else if(blockHeight > 0) {
+                        log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
+                    }
 
                     return blockHeight;
                 }
             });
 
-            Frigate.getEventBus().post(new SilentPaymentsIndexUpdate(fromBlockHeight + 1, lastBlockIndexed, transactions.size()));
+            if(lastBlockIndexed <= 0) {
+                Frigate.getEventBus().post(new SilentPaymentsMempoolIndexAdded(transactions.keySet().stream().map(blkTx -> blkTx.getTransaction().getTxId()).collect(Collectors.toSet())));
+            } else {
+                Frigate.getEventBus().post(new SilentPaymentsBlocksIndexUpdate(fromBlockHeight + 1, lastBlockIndexed, transactions.size()));
+            }
         } catch(Exception e) {
             log.error("Error adding to index", e);
         }
     }
 
-    public void startHistoryScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
-        queryPool.submit(() -> getHistoryAsync(scanAddress, startHeight, endHeight, subscriptionStatusRef));
+    public void removeFromIndex(Set<Sha256Hash> txIds) {
+        if(dbManager.isShutdown()) {
+            return;
+        }
+
+        try {
+            dbManager.executeWrite(connection -> {
+                try(PreparedStatement statement = connection.prepareStatement("DELETE FROM " + TWEAK_TABLE + " WHERE txid = ?")) {
+                    for(Sha256Hash txId : txIds) {
+                        statement.setBytes(1, txId.getBytes());
+                        statement.addBatch();
+                    }
+
+                    statement.executeBatch();
+                    return txIds.size();
+                }
+            });
+
+            Frigate.getEventBus().post(new SilentPaymentsMempoolIndexRemoved(txIds));
+        } catch(Exception e) {
+            log.error("Error removing from index", e);
+        }
     }
 
-    public void getHistoryAsync(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
-        SilentPaymentsSubscription subscription = new SilentPaymentsSubscription(scanAddress.toString(), startHeight == null ? 0 : startHeight);
+    public List<TxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
         ConcurrentLinkedQueue<TxEntry> queue = new ConcurrentLinkedQueue<>();
         AtomicLong rowsProcessedStart = new AtomicLong(0L);
 
@@ -233,14 +249,14 @@ public class Index {
             } else {
                 log.error("Query timeout", e);
             }
-            return;
+            return Collections.emptyList();
         } catch(Exception e) {
             log.error("Error scanning index", e);
-            return;
+            return Collections.emptyList();
         }
 
         if(isUnsubscribed(scanAddress, subscriptionStatusRef)) {
-            return;
+            return Collections.emptyList();
         }
 
         List<TxEntry> history = new ArrayList<>();
@@ -248,7 +264,8 @@ public class Index {
         while((entry = queue.poll()) != null) {
             history.add(entry);
         }
-        Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, PROGRESS_COMPLETE, new ArrayList<>(history), subscriptionStatusRef.get()));
+
+        return history;
     }
 
     private static boolean isUnsubscribed(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef) {

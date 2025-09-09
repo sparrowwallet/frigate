@@ -111,7 +111,9 @@ sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2
 
 ### Notifications
 
-Once subscribed, the client will receive notifications as results are returned from the scan with the following signature. All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results:
+Once subscribed, the client will receive notifications as results are returned from the scan with the following signature. 
+All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results.
+Once the client has received a notification with `progress` == `1.0`, it should consider the scan complete.
 
 ```
 blockchain.silentpayments.subscribe(subscription, progress, history)
@@ -128,8 +130,8 @@ A dictionary with the following key/value pairs:
 2. A `progress` key/value pair indicating the progress of a historical scan:
 - _progress_: A floating point value between `0.0` and `1.0`. Will be `1.0` for all current (up to date) results.
 
-3. A `history` array of confirmed transactions in blockchain order. Each confirmed transaction is a dictionary with the following keys:
-- _height_: The integer height of the block the transaction was confirmed in. For mempool transactions, `0` if all inputs are confirmed, and `-1` otherwise.
+3. A `history` array of transactions. Confirmed transactions are listed in blockchain order. Each transaction is a dictionary with the following keys:
+- _height_: The integer height of the block the transaction was confirmed in. For mempool transactions, `0` should be used.
 - _tx_hash_: The transaction hash in hexadecimal.
 
 **Result Example**
@@ -149,6 +151,10 @@ A dictionary with the following key/value pairs:
     {
       "height": 905008,
       "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403"
+    },
+    {
+      "height": 0,
+      "tx_hash": "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"
     }
   ]
 }
@@ -157,6 +163,14 @@ A dictionary with the following key/value pairs:
 It is recommended that servers implementing this protocol send history results incrementally as the historical scan progresses.
 In addition, a maximum page size of 100 history items is suggested.
 This will avoid transmission issues with large wallets that have many transactions, while providing the client with regular progress updates.
+In the case of block reorgs, the server should rescan all existing subscriptions from the reorg block height and send any history (if found) to the client with `startHeight` set to this height.
+All found mempool transactions should be sent on the initial subscription, but thereafter previously sent mempool transactions should not be resent.
+
+Clients should retrieve the transactions listed in the history with `blockchain.transaction.get` and subscribe to all owned outputs with `blockchain.scripthash.subscribe`. 
+Electrum wallet functionality then proceeds as normal.
+In other words, the silent payments address subscription is a replacement for the monotonically increasing derivation path index in BIP32 wallets.
+The subscription seeks only to add to the client's knowledge of incoming silent payments transactions.
+The client is responsible for checking the transactions do actually send to addresses it has keys for, and using normal Electrum wallet synchronization techniques to monitor for changes to these addresses. 
 
 ### blockchain.silentpayments.unsubscribe
 
