@@ -1,11 +1,7 @@
 package com.sparrowwallet.frigate.index;
 
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
-
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.concurrent.TimeUnit;
 
 public interface DbManager {
     String DB_PREFIX = "jdbc:duckdb:";

@@ -279,7 +279,7 @@ To reduce CPU load while scanning, add an entry to reduce the number of cores ma
 
 The Frigate server may be started as follows:
 ```shell
-./bin/frigated
+./bin/frigate
 ```
 
 or on macOS:
@@ -289,12 +289,12 @@ or on macOS:
 
 To start with a different network, use the `-n` parameter:
 ```shell
-./bin/frigated -n signet
+./bin/frigate -n signet
 ```
 
 The full range of options can be queried with:
 ```shell
-./bin/frigated -h
+./bin/frigate -h
 ```
 
 ### Frigate CLI
