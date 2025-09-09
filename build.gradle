@@ -59,6 +59,7 @@ jlink {
     }
     jpackage {
         imageName = os.isMacOsX() ? 'Frigate' : 'frigate'
+        installerName = imageName
         appVersion = "${version}"
         skipInstaller = !os.isLinux()
         if(os.isWindows()) {
