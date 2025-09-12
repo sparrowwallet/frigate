@@ -148,7 +148,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus {
     public void silentPaymentsBlocksIndexUpdate(SilentPaymentsBlocksIndexUpdate update) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
             if(update.fromBlockHeight() > subscription.getHighestBlockHeight()) {
-                electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), update.fromBlockHeight(), null, new WeakReference<>(this), false);
+                electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), update.fromBlockHeight(), new WeakReference<>(this), false);
             }
         }
     }

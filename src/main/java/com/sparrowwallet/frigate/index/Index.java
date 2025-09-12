@@ -173,34 +173,37 @@ public class Index {
         }
     }
 
-    public List<TxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+    public List<TxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef, boolean includeChange) {
         ConcurrentLinkedQueue<TxEntry> queue = new ConcurrentLinkedQueue<>();
         AtomicLong rowsProcessedStart = new AtomicLong(0L);
 
         try {
             dbManager.executeRead(connection -> {
-                String sql = "SELECT txid, height FROM " + TWEAK_TABLE +
-                        " WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([?, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0)))]), 1))";
-
+                String sql = "WITH computed_t AS (SELECT txid, height, outputs, tweak_key, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0))) AS t_0 FROM tweak";
                 if(startHeight != null) {
-                    sql += " AND height >= ?";
+                    sql += " WHERE height >= ?";
                 }
-                if(endHeight != null) {
-                    sql += " AND height <= ?";
+
+                sql += "), spend_keys AS (SELECT ? AS spend_pubkey";
+                if(includeChange) {
+                    sql += " UNION ALL SELECT ? AS spend_pubkey UNION ALL SELECT ? AS spend_pubkey";
                 }
+
+                sql += ") SELECT t.txid, t.height FROM computed_t t CROSS JOIN spend_keys sk WHERE list_contains(t.outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([sk.spend_pubkey, t.t_0]), 1))";
 
                 try(DuckDBPreparedStatement statement = connection.prepareStatement(sql).unwrap(DuckDBPreparedStatement.class)) {
                     if(isUnsubscribed(scanAddress, subscriptionStatusRef)) {
                         return false;
                     }
 
-                    statement.setBytes(1, scanAddress.getSpendKey().getPubKey());
-                    statement.setBytes(2, scanAddress.getScanKey().getPrivKeyBytes());
+                    statement.setBytes(1, scanAddress.getScanKey().getPrivKeyBytes());
                     if(startHeight != null) {
-                        statement.setInt(3, startHeight);
+                        statement.setInt(2, startHeight);
                     }
-                    if(endHeight != null) {
-                        statement.setInt(startHeight == null ? 3 : 4, endHeight);
+                    statement.setBytes(startHeight == null ? 2 : 3, scanAddress.getSpendKey().getPubKey());
+                    if(includeChange) {
+                        statement.setBytes(startHeight == null ? 3 : 4, scanAddress.getChangeAddress().getSpendKey().getPubKey());
+                        statement.setBytes(startHeight == null ? 4 : 5, scanAddress.getChangeAddress().getSpendKey().negate().getPubKey());
                     }
                     statement.setFetchSize(1);
 

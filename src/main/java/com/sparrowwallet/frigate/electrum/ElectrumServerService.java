@@ -203,7 +203,7 @@ public class ElectrumServerService {
         requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress);
 
         int startHeight = getStartHeight(start);
-        indexQuerier.startHistoryScan(silentPaymentScanAddress, startHeight, null, new WeakReference<>(requestHandler));
+        indexQuerier.startHistoryScan(silentPaymentScanAddress, startHeight, new WeakReference<>(requestHandler));
 
         return silentPaymentScanAddress.getAddress();
     }
