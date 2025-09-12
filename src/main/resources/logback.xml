@@ -11,8 +11,14 @@
         <application>frigate</application>
     </define>
 
-    <appender name="FILE" class="ch.qos.logback.core.FileAppender">
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${appDir}/frigate.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${appDir}/frigate.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>100MB</maxFileSize>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>3GB</totalSizeCap>
+        </rollingPolicy>
         <encoder>
             <pattern>%date %level [%thread] %logger{10} [%file:%line] %msg%n</pattern>
         </encoder>
