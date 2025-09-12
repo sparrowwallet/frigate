@@ -40,4 +40,7 @@ public class Args {
 
     @Parameter(names = { "--quiet", "-q" }, description = "Disable printing of the progress bar")
     public boolean quiet;
+
+    @Parameter(names = { "--height" }, description = "Query tweaks for specific block height")
+    public Integer blockHeight;
 }

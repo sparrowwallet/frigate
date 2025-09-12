@@ -290,6 +290,30 @@ public class Index {
         return status == null || !status.isConnected() || !status.isSilentPaymentsAddressSubscribed(scanAddress.toString());
     }
 
+    public List<TweakEntry> getTweaksByHeight(int blockHeight) {
+        try {
+            return dbManager.executeRead(connection -> {
+                try(PreparedStatement statement = connection.prepareStatement("SELECT txid, tweak_key FROM " + TWEAK_TABLE + " WHERE height = ?")) {
+                    statement.setInt(1, blockHeight);
+                    List<TweakEntry> tweaks = new ArrayList<>();
+                    
+                    try(ResultSet resultSet = statement.executeQuery()) {
+                        while(resultSet.next()) {
+                            byte[] txid = resultSet.getBytes(1);
+                            byte[] tweakKey = resultSet.getBytes(2);
+                            tweaks.add(new TweakEntry(Utils.bytesToHex(txid), Utils.bytesToHex(tweakKey)));
+                        }
+                    }
+                    
+                    return tweaks;
+                }
+            });
+        } catch(Exception e) {
+            log.error("Error getting tweaks by height " + blockHeight, e);
+            return Collections.emptyList();
+        }
+    }
+
     public static long getHashPrefix(byte[] hash, int offset) {
         if(hash.length < 8 + offset) {
             throw new IllegalArgumentException("Hash must be at least 8 bytes long from the offset");

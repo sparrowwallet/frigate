@@ -16,6 +16,7 @@ import com.sparrowwallet.frigate.bitcoind.BlockStats;
 import com.sparrowwallet.frigate.bitcoind.FeeInfo;
 import com.sparrowwallet.frigate.bitcoind.MempoolInfo;
 import com.sparrowwallet.frigate.index.IndexQuerier;
+import com.sparrowwallet.frigate.index.TweakEntry;
 import com.sparrowwallet.frigate.index.TxEntry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -214,6 +215,15 @@ public class ElectrumServerService {
         requestHandler.unsubscribeSilentPaymentsAddress(silentPaymentScanAddress);
 
         return silentPaymentScanAddress.getAddress();
+    }
+
+    @JsonRpcMethod("blockchain.silentpayments.tweaks")
+    public Collection<TweakEntry> getTweaksByHeight(@JsonRpcParam("block_height") int blockHeight) throws BitcoindIOException, BlockNotFoundException {
+        try {
+            return indexQuerier.getTweaksByHeight(blockHeight);
+        } catch(IllegalStateException e) {
+            throw new BitcoindIOException(e);
+        }
     }
 
     private static SilentPaymentScanAddress getSilentPaymentScanAddress(String scanPrivateKey, String spendPublicKey) {
