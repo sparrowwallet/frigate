@@ -57,7 +57,7 @@ Frigate stores this data in a single table with the following schema:
 | `tweak_key`  | BLOB         |
 | `outputs`    | LIST(BIGINT) |
 
-The `txid` and `tweak_key` values are 32 and 33 byte BLOBS respectively. 
+The `txid` and `tweak_key` values are 32 and 64 byte BLOBS respectively. 
 The `outputs` value is a list of 8 byte integers, each representing the first 8 bytes of the x-value of the Taproot output public key.
 
 On startup, Frigate connects to the configured Bitcoin Core RPC, downloads blocks from the configured block height (or from Taproot activation on mainnet) and adds entries to the table.
@@ -73,12 +73,21 @@ SELECT secp256k1_ec_pubkey_tweak_mul(tweak_key, scalar);
 ```
 which allows the EC point computation to happen as close to the tweak data as possible.
 
-With these extensions, Frigate performs a query as follows:
+With these extensions, you can scan for silent payments with a query as follows:
 ```sql
-SELECT txid, height FROM tweak WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([SPEND_PUBLIC_KEY, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, SCAN_PRIVATE_KEY) || int_to_big_endian(0)))]), 1));
+SELECT txid, tweak_key, height FROM tweak WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([SPEND_PUBLIC_KEY, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, SCAN_PRIVATE_KEY) || int_to_big_endian(0)))]), 1));
 ```
-This computes the Taproot output key for `k = 0` and compares it to the list of known keys for each tweak row, returning the `txid` and `height` if there is a match.
+This computes the Taproot output key for `k = 0` and compares it to the list of known keys for each tweak row, returning the `txid`, `tweak_key` and `height` if there is a match.
 The client can then download the transaction and determine if it does indeed contain outputs it is interested in, including for higher values of `k`.
+
+In order to reduce serialisation costs, Frigate uses a function that performs these steps at once, also including a further step to scan for change:
+```sql
+SELECT txid, tweak_key, height FROM tweak WHERE scan_silent_payments(outputs, [SCAN_PRIVATE_KEY, SPEND_PUBLIC_KEY, tweak_key], [CHANGE_TWEAK_KEY]);
+```
+The change tweak is added to the computed P<sub>0</sub> and checked against the outputs for a match.
+If no match is found, the result of the addition is negated and checked again.
+
+A further optimization is made by passing in uncompressed 64 byte public keys in a little endian x,y format to avoid uncompressing the keys for each tweak. 
 
 ## Electrum protocol
 
@@ -134,6 +143,7 @@ A dictionary with the following key/value pairs:
 3. A `history` array of transactions. Confirmed transactions are listed in blockchain order. Each transaction is a dictionary with the following keys:
 - _height_: The integer height of the block the transaction was confirmed in. For mempool transactions, `0` should be used.
 - _tx_hash_: The transaction hash in hexadecimal.
+- _tweak_key_: The tweak key (`input_hash*A`) for the transaction in compressed format.
 
 **Result Example**
 
@@ -147,15 +157,18 @@ A dictionary with the following key/value pairs:
   "history": [
     {
       "height": 890004,
-      "tx_hash": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412"
+      "tx_hash": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412",
+      "tweak_key": "0314bec14463d6c0181083d607fecfba67bb83f95915f6f247975ec566d5642ee8"
     },
     {
       "height": 905008,
-      "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403"
+      "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403",
+      "tweak_key": "024ac253c216532e961988e2a8ce266a447c894c781e52ef6cee902361db960004"
     },
     {
       "height": 0,
-      "tx_hash": "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"
+      "tx_hash": "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16",
+      "tweak_key": "03aeea547819c08413974e2ab2b12212e007166bb2058f88b009e082b9b4914a58"
     }
   ]
 }
@@ -171,7 +184,8 @@ Clients should retrieve the transactions listed in the history with `blockchain.
 Electrum wallet functionality then proceeds as normal.
 In other words, the silent payments address subscription is a replacement for the monotonically increasing derivation path index in BIP32 wallets.
 The subscription seeks only to add to the client's knowledge of incoming silent payments transactions.
-The client is responsible for checking the transactions do actually send to addresses it has keys for, and using normal Electrum wallet synchronization techniques to monitor for changes to these addresses. 
+The client is responsible for checking the transactions do actually send to addresses it has keys for, and using normal Electrum wallet synchronization techniques to monitor for changes to these addresses.
+The tweak key is provided to allow the client to avoid looking up the scriptPubKeys of spent outputs.
 
 ### blockchain.silentpayments.unsubscribe
 
@@ -230,38 +244,21 @@ The scanning query is essentially CPU bound, mostly around EC point multiplicati
 It will by default configure itself to use all the available cores on the server it is running.
 The behaviour can be configured in the Frigate configuration file (see `dbThreads`).
 
-The following set of benchmarks was generated on a M1 Macbook Pro with 10 available CPUs, scanning mainnet to a block height of 911434 with a database size of ~13Gb.
+The following set of benchmarks was generated on a M1 Macbook Pro with 10 available CPUs, scanning mainnet to a block height of 911434 with a database size of ~17Gb.
 **Note that no cut-through or dust filter has been used.**
 
-|                       |   Blocks  |   Start   | Transactions |   Time       | Transactions/sec |
-|-----------------------|-----------|-----------|--------------|--------------|------------------|
-|   2 hours             |   12      |   911422  | 8961         |   474ms      | 18905            |
-|   1 day               |   144     |   911290  | 149059       |   5s 6ms     | 29776            |
-|   1 week              |   1008    |   910426  | 1143906      |   7s 992ms   | 143131           |
-|   2 weeks             |   2016    |   909418  | 2349028      |   17s 408ms  | 134940           |
-|   4 weeks             |   4032    |   907402  | 5002030      |   36s 796ms  | 135940           |
-|   8 weeks             |   8064    |   903370  | 9441899      |   1m 6s      | 142101           |
-|   16 weeks            |   16128   |   895306  | 15910877     |   1m 51s     | 143269           |
-|   32 weeks            |   32256   |   879178  | 32666940     |   3m 47s     | 143638           |
-|   64 weeks            |   64512   |   846922  | 77427166     |   8m 55s     | 144606           |
-|   Taproot Activation  |   201802  |   709632  | 153651412    |   17m 25s    | 147043           |
+|                       |   Blocks  |   Start   | Transactions | Time      | Transactions/sec |
+|-----------------------|-----------|-----------|--------------|-----------|------------------|
+|   2 hours             |   12      |   911422  | 8961         | 407ms     | 22017            |
+|   1 day               |   144     |   911290  | 149059       | 5s 142ms  | 28989            |
+|   1 week              |   1008    |   910426  | 1143906      | 6s 188ms  | 184859           |
+|   2 weeks             |   2016    |   909418  | 2349028      | 12s 667ms | 185445           |
+|   4 weeks             |   4032    |   907402  | 5002030      | 27s 947ms | 178983           |
+|   8 weeks             |   8064    |   903370  | 9441899      | 50s 420ms | 187265           |
+|   16 weeks            |   16128   |   895306  | 15910877     | 1m 23s    | 191801           |
+|   32 weeks            |   32256   |   879178  | 32666940     | 2m 53s    | 189098           |
 
 Higher performance on the longer periods is possible by increasing the number of CPUs.
-The following set of benchmarks was generated on an Intel server with 32 cores using the same tweak database:
-
-|                    |   Blocks  |   Start   | Transactions | Time      | Transactions/sec |
-|--------------------|-----------|-----------|--------------|-----------|------------------|
-| 2 hours            |   12      |   911422  | 8961         | 1s 345ms  | 6662             |
-| 1 day              |   144     |   911290  | 149059       | 7s 703ms  | 19351            |
-| 1 week             |   1008    |   910426  | 1143906      | 9s 625ms  | 118847           |
-| 2 weeks            |   2016    |   909418  | 2349028      | 14s 714ms | 159646           |
-| 4 weeks            |   4032    |   907402  | 5002030      | 27s 666ms | 180801           |
-| 8 weeks            |   8064    |   903370  | 9441899      | 44s 979ms | 209918           |
-| 16 weeks           |   16128   |   895306  | 15910877     | 1m 20s    | 199695           |
-| 32 weeks           |   32256   |   879178  | 32666940     | 2m 30s    | 217561           |
-| 64 weeks           |   64512   |   846922  | 77427166     | 5m 45s    | 224315           |
-| Taproot Activation |   201802  |   709632  | 153651412    | 11m 34s   | 221502           |
-
 Multiple clients conducting simultaneous scans slows each scan linearly. 
 Further performance improvements (or handling additional clients) may be performed by scaling out across [multiple read-only replicas of the database](https://motherduck.com/docs/key-tasks/authenticating-and-connecting-to-motherduck/read-scaling/).
 It is also possible to consider hardware acceleration techniques such as [HSMs](https://docs.aws.amazon.com/cloudhsm/latest/userguide/performance.html), [cryptographic coprocessors](https://developer.arm.com/Processors/CryptoCell-310) or GPU acceleration.

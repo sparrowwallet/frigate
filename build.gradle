@@ -8,7 +8,7 @@ org.gradle.internal.os.OperatingSystem os = org.gradle.internal.os.OperatingSyst
 String releaseArch = System.getProperty('os.arch') == 'aarch64' ? 'aarch64' : 'x86_64'
 
 group = 'com.sparrowwallet.frigate'
-version = '1.0.0'
+version = '1.1.0'
 
 repositories {
     mavenCentral()
@@ -41,6 +41,9 @@ test {
 application {
     mainModule = 'com.sparrowwallet.frigate'
     mainClass = 'com.sparrowwallet.frigate.Frigate'
+
+    applicationDefaultJvmArgs = ["-XX:+HeapDumpOnOutOfMemoryError",
+                                 "--enable-native-access=org.duckdb.duckdb_jdbc"]
 }
 
 jlink {
@@ -52,6 +55,7 @@ jlink {
     options = ['--strip-native-commands', '--strip-java-debug-attributes', '--compress', 'zip-6', '--no-header-files', '--no-man-pages', '--ignore-signing-information', '--exclude-files', '**.png', '--exclude-resources', 'glob:/com.sparrowwallet.merged.module/META-INF/*']
     launcher {
         name = 'frigate'
+        jvmArgs = ["--enable-native-access=org.duckdb.duckdb_jdbc"]
     }
     secondaryLauncher {
         name = 'frigate-cli'

@@ -2,8 +2,10 @@ package com.sparrowwallet.frigate.index;
 
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.sparrowwallet.drongo.Utils;
+import com.sparrowwallet.drongo.crypto.ECKey;
 import com.sparrowwallet.drongo.protocol.*;
 import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
+import com.sparrowwallet.drongo.silentpayments.SilentPaymentUtils;
 import com.sparrowwallet.drongo.wallet.BlockTransaction;
 import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.Frigate;
@@ -112,7 +114,7 @@ public class Index {
                     }
 
                     statement.executeBatch();
-                    if(fromBlockHeight < 0) {
+                    if(blockHeight <= 0 && lastBlockIndexed < 0) {
                         log.info("Indexed " + transactions.size() + " mempool transactions");
                     } else if(blockHeight > 0) {
                         log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
@@ -173,14 +175,14 @@ public class Index {
         }
     }
 
-    public List<TxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+    public List<TxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, boolean scanForChange, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
         ConcurrentLinkedQueue<TxEntry> queue = new ConcurrentLinkedQueue<>();
         AtomicLong rowsProcessedStart = new AtomicLong(0L);
 
         try {
             dbManager.executeRead(connection -> {
-                String sql = "SELECT txid, height FROM " + TWEAK_TABLE +
-                        " WHERE list_contains(outputs, hash_prefix_to_int(secp256k1_ec_pubkey_combine([?, secp256k1_ec_pubkey_create(secp256k1_tagged_sha256('BIP0352/SharedSecret', secp256k1_ec_pubkey_tweak_mul(tweak_key, ?) || int_to_big_endian(0)))]), 1))";
+                String sql = "SELECT txid, tweak_key, height FROM " + TWEAK_TABLE +
+                        " WHERE scan_silent_payments(outputs, [?, ?, tweak_key], " + (scanForChange ? "[?])" : "[])");
 
                 if(startHeight != null) {
                     sql += " AND height >= ?";
@@ -194,13 +196,16 @@ public class Index {
                         return false;
                     }
 
-                    statement.setBytes(1, scanAddress.getSpendKey().getPubKey());
-                    statement.setBytes(2, scanAddress.getScanKey().getPrivKeyBytes());
+                    statement.setBytes(1, scanAddress.getScanKey().getPrivKeyBytes());
+                    statement.setBytes(2, SilentPaymentUtils.getSecp256k1PubKey(scanAddress.getSpendKey()));
+                    if(scanForChange) {
+                        statement.setBytes(3, SilentPaymentUtils.getSecp256k1PubKey(scanAddress.getChangeTweakKey()));
+                    }
                     if(startHeight != null) {
-                        statement.setInt(3, startHeight);
+                        statement.setInt(scanForChange ? 4 : 3, startHeight);
                     }
                     if(endHeight != null) {
-                        statement.setInt(startHeight == null ? 3 : 4, endHeight);
+                        statement.setInt(scanForChange ? startHeight == null ? 4 : 5 : startHeight == null ? 3 : 4, endHeight);
                     }
                     statement.setFetchSize(1);
 
@@ -252,8 +257,9 @@ public class Index {
                         ResultSet resultSet = statement.executeQuery();
                         while(resultSet.next()) {
                             byte[] txid = resultSet.getBytes(1);
-                            int height = resultSet.getInt(2);
-                            queue.offer(new TxEntry(height, 0, Utils.bytesToHex(txid)));
+                            byte[] tweak_key = compressRawKey(resultSet.getBytes(2));
+                            int height = resultSet.getInt(3);
+                            queue.offer(new TxEntry(height, 0, Utils.bytesToHex(txid), Utils.bytesToHex(tweak_key)));
                         }
                     }
                 }
@@ -325,5 +331,15 @@ public class Index {
             result = (result << 8) | (hash[i] & 0xFF);
         }
         return result;
+    }
+
+    public static byte[] compressRawKey(byte[] rawUncompressed) {
+        byte[] uncompressed = new byte[64];
+        System.arraycopy(rawUncompressed, 0, uncompressed, 32, 32);
+        System.arraycopy(rawUncompressed, 32, uncompressed, 0, 32);
+        uncompressed = Utils.reverseBytes(uncompressed);
+
+        ECKey ecKey = ECKey.fromPublicOnly(Utils.concat(new byte[] {0x04}, uncompressed));
+        return ecKey.getPubKey(true);
     }
 }

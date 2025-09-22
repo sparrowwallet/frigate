@@ -23,6 +23,7 @@ public class Config {
     private Integer dbThreads;
     private String dbUrl;
     private List<String> readDbUrls;
+    private boolean scanForChange = true;
 
     private static Config INSTANCE;
 
@@ -155,6 +156,15 @@ public class Config {
 
     public void setReadDbUrls(List<String> readDbUrls) {
         this.readDbUrls = readDbUrls;
+        flush();
+    }
+
+    public boolean getScanForChange() {
+        return scanForChange;
+    }
+
+    public void setScanForChange(boolean scanForChange) {
+        this.scanForChange = scanForChange;
         flush();
     }
 

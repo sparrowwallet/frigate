@@ -159,10 +159,10 @@ public class BitcoindClient {
                         spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
                     }
 
-                    byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys);
+                    byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
                     if(tweak != null) {
                         BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), i, block.getBlockHeader().getTimeAsDate(), 0L, tx, block.getHash());
-                        eligibleTransactions.put(blkTx, tweak);
+                        eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
                     }
                 }
             }
@@ -201,10 +201,10 @@ public class BitcoindClient {
                         spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
                     }
 
-                    byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys);
+                    byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
                     if(tweak != null) {
                         BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), 0, null, 0L, tx, null);
-                        eligibleTransactions.put(blkTx, tweak);
+                        eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
                     }
                 }
             } catch(JsonRpcException e) {

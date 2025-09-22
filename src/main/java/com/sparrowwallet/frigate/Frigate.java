@@ -18,7 +18,7 @@ import java.util.Locale;
 
 public class Frigate {
     public static final String SERVER_NAME = "Frigate";
-    public static final String SERVER_VERSION = "1.0.0";
+    public static final String SERVER_VERSION = "1.1.0";
     public static final String APP_HOME_PROPERTY = "frigate.home";
     public static final String NETWORK_ENV_PROPERTY = "FRIGATE_NETWORK";
     private static final int MAINNET_TAPROOT_ACTIVATION_HEIGHT = 709632;
@@ -56,7 +56,8 @@ public class Frigate {
             bitcoindClient.initialize();
         }
 
-        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex));
+        boolean scanForChange = Config.get().getScanForChange();
+        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex, scanForChange));
         Thread electrumServerThread = new Thread(electrumServer, "Frigate Electrum Server");
         electrumServerThread.setDaemon(false);
         electrumServerThread.start();
