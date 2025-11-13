@@ -19,6 +19,7 @@ import static com.sparrowwallet.frigate.Frigate.*;
 
 public class FrigateCli implements Thread.UncaughtExceptionHandler {
     private static final String APP_NAME = "frigate-cli";
+    private static final String ELECTRUM_VERSION = "1.4";
 
     private final HostAndPort server;
     private String scanPrivateKey;
@@ -83,6 +84,10 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
     public void scan(boolean follow, boolean quiet) {
         JsonRpcClient jsonRpcClient = new JsonRpcClient(getTransport());
         ElectrumClientService electrumClientService = jsonRpcClient.onDemand(ElectrumClientService.class);
+
+        // Negotiate protocol version first (required by Electrum protocol)
+        electrumClientService.getServerVersion(APP_NAME, ELECTRUM_VERSION);
+
         String address = electrumClientService.subscribeSilentPayments(scanPrivateKey, spendPublicKey, start, labels);
 
         try {

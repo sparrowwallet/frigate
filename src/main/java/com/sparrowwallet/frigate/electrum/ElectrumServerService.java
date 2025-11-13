@@ -60,7 +60,7 @@ public class ElectrumServerService {
     }
 
     private Version getMaxSupportedVersion() {
-        return bitcoindClient.containsSubmitPackage() ? MAX_SUBMIT_PACKAGE_VERSION : MAX_DEFAULT_VERSION;
+        return bitcoindClient != null && bitcoindClient.containsSubmitPackage() ? MAX_SUBMIT_PACKAGE_VERSION : MAX_DEFAULT_VERSION;
     }
 
     @JsonRpcMethod("server.version")
