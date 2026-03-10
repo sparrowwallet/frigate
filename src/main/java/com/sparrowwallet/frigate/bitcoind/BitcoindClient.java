@@ -13,12 +13,14 @@ import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.CoreAuthType;
 import com.sparrowwallet.frigate.io.RecentBlocksMap;
+import com.sparrowwallet.frigate.bitcoind.reader.FlatFileBlockDataSource;
 import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -97,7 +99,23 @@ public class BitcoindClient {
             Config.get().setScriptPubKeyCacheSize(cacheSize);
         }
         this.scriptPubKeyCache = lruCache(cacheSize);
-        this.blockDataSource = new RpcBlockDataSource(getBitcoindService(), scriptPubKeyCache);
+
+        BlockDataSource dataSource = null;
+        Path coreDataDirPath = coreDataDir.toPath();
+        if(FlatFileBlockDataSource.isAvailable(coreDataDirPath)) {
+            try {
+                Path blocksDir = FlatFileBlockDataSource.resolveBlocksDir(coreDataDirPath);
+                Path indexDir = blocksDir.resolve("index");
+                dataSource = new FlatFileBlockDataSource(blocksDir, indexDir, scriptPubKeyCache);
+                log.info("Using flat file block data source");
+            } catch(IOException e) {
+                log.warn("Flat file block index available but failed to load, falling back to RPC", e);
+            }
+        }
+        if(dataSource == null) {
+            dataSource = new RpcBlockDataSource(getBitcoindService(), scriptPubKeyCache);
+        }
+        this.blockDataSource = dataSource;
     }
 
     public void initialize() {
@@ -133,18 +151,28 @@ public class BitcoindClient {
         }
 
         lastBlock = blockchainInfo.bestblockhash();
+        int startHeight = blocksIndex.getLastBlockIndexed() + 1;
+        int endHeight = Math.min(tip.height(), blockDataSource.getAvailableHeight());
         log.info("Initializing indexes...");
+        long startTime = System.nanoTime();
         updateBlocksIndex();
+        int blocksIndexed = endHeight - startHeight + 1;
+        if(blocksIndexed > 0) {
+            long elapsedMs = (System.nanoTime() - startTime) / 1_000_000;
+            double blocksPerSec = blocksIndexed / (elapsedMs / 1000.0);
+            log.info("Indexed {} blocks ({} to {}) in {}.{}s ({} blocks/sec)", blocksIndexed, startHeight, endHeight, elapsedMs / 1000, String.format("%03d", elapsedMs % 1000), String.format("%.1f", blocksPerSec));
+        }
         updateMempoolIndex();
     }
 
     private synchronized void updateBlocksIndex() {
-        for(int i = blocksIndex.getLastBlockIndexed() + 1; i <= tip.height(); i++) {
+        int maxHeight = Math.min(tip.height(), blockDataSource.getAvailableHeight());
+        for(int i = blocksIndex.getLastBlockIndexed() + 1; i <= maxHeight; i++) {
             BlockWithSpentOutputs blockData = blockDataSource.getBlockForIndexing(i);
             Block block = blockData.block();
             Map<HashIndex, Script> spentScriptPubKeys = blockData.spentScriptPubKeys();
 
-            if(i > tip.height() - MAX_REORG_DEPTH) {
+            if(i > maxHeight - MAX_REORG_DEPTH) {
                 recentBlocksMap.put(i, blockData.blockHash());
             }
 

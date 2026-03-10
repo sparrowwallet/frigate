@@ -15,6 +15,15 @@ public interface BlockDataSource extends Closeable {
      */
     BlockWithSpentOutputs getBlockForIndexing(int height);
 
+    /**
+     * Returns the maximum block height available from this data source.
+     * For RPC, this is effectively unlimited (returns Integer.MAX_VALUE).
+     * For flat files, this is the max height in the on-disk index.
+     */
+    default int getAvailableHeight() {
+        return Integer.MAX_VALUE;
+    }
+
     @Override
     default void close() throws IOException {}
 }

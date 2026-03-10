@@ -7,7 +7,7 @@ import com.sparrowwallet.drongo.protocol.TransactionOutput;
 public final class ScriptUtils {
     private ScriptUtils() {}
 
-    static ScriptType getValidScriptType(byte[] scriptPubKey) {
+    public static ScriptType getValidScriptType(byte[] scriptPubKey) {
         if(scriptPubKey == null) {
             return null;
         }
@@ -49,7 +49,7 @@ public final class ScriptUtils {
         return null;
     }
 
-    static boolean containsTaprootOutput(Transaction tx) {
+    public static boolean containsTaprootOutput(Transaction tx) {
         for(TransactionOutput txOutput : tx.getOutputs()) {
             ScriptType scriptType = getValidScriptType(txOutput.getScriptBytes());
             if(scriptType == ScriptType.P2TR) {
