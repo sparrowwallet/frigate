@@ -56,14 +56,6 @@ public class FlatFileBlockDataSource implements BlockDataSource {
             Block block = blockReader.readAndParseBlock(idx.getFileNumber(height), idx.getDataPos(height));
             String blockHash = block.getHash().toString();
 
-            // Cache all outputs for mempool indexing benefit (shared cache with BitcoindClient)
-            for(Transaction tx : block.getTransactions()) {
-                for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
-                    byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
-                    addToScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
-                }
-            }
-
             // Genesis block (height 0) has no undo data and no non-coinbase transactions
             if(height == 0) {
                 return new BlockWithSpentOutputs(block, blockHash, Map.of());
@@ -108,7 +100,17 @@ public class FlatFileBlockDataSource implements BlockDataSource {
         return blockIndex.getMaxHeight();
     }
 
-    private void reloadIndex() {
+    @Override
+    public void populateCache(BlockWithSpentOutputs blockData) {
+        for(Transaction tx : blockData.block().getTransactions()) {
+            for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
+                byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
+                addToScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
+            }
+        }
+    }
+
+    private synchronized void reloadIndex() {
         try {
             this.blockIndex = BlockIndex.load(indexDir.resolve("headers.dat"));
             log.debug("Reloaded flat file block index, max height {}", blockIndex.getMaxHeight());

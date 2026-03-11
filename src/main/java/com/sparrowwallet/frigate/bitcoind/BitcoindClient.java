@@ -22,6 +22,8 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -31,6 +33,7 @@ public class BitcoindClient {
 
     public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 10000000;
     private static final int MAX_REORG_DEPTH = 10;
+    private static final int CONCURRENT_THRESHOLD = 100;
     public static final int MIN_SUBMIT_PACKAGE_VERSION = 280000;
 
     private final JsonRpcClient jsonRpcClient;
@@ -166,9 +169,20 @@ public class BitcoindClient {
     }
 
     private synchronized void updateBlocksIndex() {
+        int startHeight = blocksIndex.getLastBlockIndexed() + 1;
         int maxHeight = Math.min(tip.height(), blockDataSource.getAvailableHeight());
-        for(int i = blocksIndex.getLastBlockIndexed() + 1; i <= maxHeight; i++) {
+
+        if(maxHeight - startHeight + 1 >= CONCURRENT_THRESHOLD && blockDataSource instanceof FlatFileBlockDataSource) {
+            updateBlocksIndexConcurrent(startHeight, maxHeight);
+        } else {
+            updateBlocksIndexSequential(startHeight, maxHeight);
+        }
+    }
+
+    private void updateBlocksIndexSequential(int startHeight, int maxHeight) {
+        for(int i = startHeight; i <= maxHeight; i++) {
             BlockWithSpentOutputs blockData = blockDataSource.getBlockForIndexing(i);
+            blockDataSource.populateCache(blockData);
             Block block = blockData.block();
             Map<HashIndex, Script> spentScriptPubKeys = blockData.spentScriptPubKeys();
 
@@ -191,6 +205,87 @@ public class BitcoindClient {
                 blocksIndex.addToIndex(eligibleTransactions);
             }
         }
+
+        if(maxHeight >= startHeight) {
+            blocksIndex.setLastBlockIndexed(maxHeight);
+        }
+    }
+
+    private void updateBlocksIndexConcurrent(int startHeight, int maxHeight) {
+        int threads = Runtime.getRuntime().availableProcessors();
+        int batchSize = threads * 2;
+        AtomicInteger counter = new AtomicInteger(0);
+        ExecutorService executor = Executors.newFixedThreadPool(threads, r -> {
+            Thread t = new Thread(r, "block-indexer-" + counter.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
+
+        try {
+            int totalBlocks = maxHeight - startHeight + 1;
+            int blocksProcessed = 0;
+            long lastLogTime = System.nanoTime();
+
+            for(int batchStart = startHeight; batchStart <= maxHeight; batchStart += batchSize) {
+                int batchEnd = Math.min(batchStart + batchSize - 1, maxHeight);
+
+                List<Future<BlockIndexResult>> futures = new ArrayList<>();
+                for(int h = batchStart; h <= batchEnd; h++) {
+                    final int height = h;
+                    futures.add(executor.submit(() -> processBlock(height)));
+                }
+
+                for(int idx = 0; idx < futures.size(); idx++) {
+                    int height = batchStart + idx;
+                    try {
+                        BlockIndexResult result = futures.get(idx).get();
+
+                        blockDataSource.populateCache(result.blockData());
+                        if(height > maxHeight - MAX_REORG_DEPTH) {
+                            recentBlocksMap.put(height, result.blockHash());
+                        }
+                        if(!result.eligibleTransactions().isEmpty()) {
+                            blocksIndex.addToIndex(result.eligibleTransactions());
+                        }
+                    } catch(ExecutionException e) {
+                        throw new RuntimeException("Failed to index block " + height, e.getCause());
+                    } catch(InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException("Interrupted during block indexing", e);
+                    }
+                }
+
+                blocksProcessed += (batchEnd - batchStart + 1);
+                long now = System.nanoTime();
+                if(now - lastLogTime >= 30_000_000_000L) {
+                    log.info("Indexing progress: {} / {} blocks (height {})", blocksProcessed, totalBlocks, batchEnd);
+                    lastLogTime = now;
+                }
+            }
+
+            blocksIndex.setLastBlockIndexed(maxHeight);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private BlockIndexResult processBlock(int height) {
+        BlockWithSpentOutputs blockData = blockDataSource.getBlockForIndexing(height);
+        Block block = blockData.block();
+        Map<HashIndex, Script> spentScriptPubKeys = blockData.spentScriptPubKeys();
+
+        Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+        for(Transaction tx : block.getTransactions()) {
+            if(!tx.isCoinBase() && ScriptUtils.containsTaprootOutput(tx)) {
+                byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
+                if(tweak != null) {
+                    BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), height, block.getBlockHeader().getTimeAsDate(), 0L, tx, block.getHash());
+                    eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
+                }
+            }
+        }
+
+        return new BlockIndexResult(height, blockData.blockHash(), blockData, eligibleTransactions);
     }
 
     private synchronized void updateMempoolIndex() {

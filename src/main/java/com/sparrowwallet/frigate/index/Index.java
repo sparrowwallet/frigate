@@ -138,6 +138,12 @@ public class Index {
         }
     }
 
+    public void setLastBlockIndexed(int height) {
+        if(height > lastBlockIndexed) {
+            lastBlockIndexed = height;
+        }
+    }
+
     public void addToIndex(Map<BlockTransaction, byte[]> transactions) {
         if(dbManager.isShutdown()) {
             return;

@@ -24,6 +24,13 @@ public interface BlockDataSource extends Closeable {
         return Integer.MAX_VALUE;
     }
 
+    /**
+     * Populate the scriptPubKey cache for outputs in this block.
+     * Called sequentially from the main thread after getBlockForIndexing().
+     * Default no-op — RpcBlockDataSource populates its cache during getBlockForIndexing().
+     */
+    default void populateCache(BlockWithSpentOutputs blockData) {}
+
     @Override
     default void close() throws IOException {}
 }

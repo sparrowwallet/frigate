@@ -63,7 +63,7 @@ public class RpcBlockDataSource implements BlockDataSource {
                 Transaction tx = new Transaction(hexFormat.parseHex(txHex));
                 TransactionOutput txOutput = tx.getOutputs().get((int) hashIndex.getIndex());
                 addToScriptPubKeyCache(hashIndex.getHash(), (int) hashIndex.getIndex(), txOutput.getScriptBytes());
-                scriptPubKey = getFromScriptPubKeyCache(hashIndex);
+                scriptPubKey = new Script(txOutput.getScriptBytes());
             } catch(Exception e) {
                 log.error("Error retrieving scriptPubKey for txid " + hashIndex.getHash() + " output index " + hashIndex.getIndex(), e);
                 throw e;
@@ -74,7 +74,7 @@ public class RpcBlockDataSource implements BlockDataSource {
 
     private Script getFromScriptPubKeyCache(HashIndex hashIndex) {
         byte[] scriptPubKeyBytes = scriptPubKeyCache.get(hashIndex);
-        if(scriptPubKeyBytes != null) {
+        if(scriptPubKeyBytes != null && scriptPubKeyBytes.length > 0) {
             return new Script(scriptPubKeyBytes);
         }
         return null;
