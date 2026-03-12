@@ -16,10 +16,16 @@ public class UndoReader {
 
     private final Path blocksDir;
     private final XorObfuscation xor;
+    private final MappedBlockFiles mappedFiles;
 
     public UndoReader(Path blocksDir, XorObfuscation xor) {
+        this(blocksDir, xor, null);
+    }
+
+    public UndoReader(Path blocksDir, XorObfuscation xor, MappedBlockFiles mappedFiles) {
         this.blocksDir = blocksDir;
         this.xor = xor;
+        this.mappedFiles = mappedFiles;
     }
 
     /** A single spent output from the undo data. */
@@ -40,7 +46,45 @@ public class UndoReader {
      *                      used to verify the undo data checksum. Pass null to skip verification.
      */
     public BlockUndo readBlockUndo(int fileNumber, int undoPos, byte[] prevBlockHash) throws IOException {
-        Path undoFile = blocksDir.resolve(String.format("rev%05d.dat", fileNumber));
+        String fileName = String.format("rev%05d.dat", fileNumber);
+
+        if(mappedFiles != null) {
+            return readBlockUndoMapped(fileName, undoPos, prevBlockHash);
+        }
+
+        return readBlockUndoRaf(fileName, undoPos, prevBlockHash);
+    }
+
+    private BlockUndo readBlockUndoMapped(String fileName, int undoPos, byte[] prevBlockHash) throws IOException {
+        byte[] sizeBytes = mappedFiles.read(fileName, undoPos - 4, 4);
+        if(sizeBytes == null) {
+            return readBlockUndoRaf(fileName, undoPos, prevBlockHash);
+        }
+        xor.deobfuscate(sizeBytes, undoPos - 4);
+        int undoSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+
+        if(undoSize < 0 || undoSize > MAX_UNDO_SIZE) {
+            throw new IOException("Invalid undo size " + undoSize + " in " + fileName + " pos " + undoPos);
+        }
+
+        byte[] undoData = mappedFiles.read(fileName, undoPos, undoSize);
+        xor.deobfuscate(undoData, undoPos);
+
+        if(prevBlockHash != null) {
+            byte[] storedChecksum = mappedFiles.read(fileName, undoPos + undoSize, 32);
+            xor.deobfuscate(storedChecksum, undoPos + undoSize);
+
+            byte[] computed = Sha256Hash.hashTwice(prevBlockHash, undoData);
+            if(!Arrays.equals(storedChecksum, computed)) {
+                throw new IOException("Undo data checksum mismatch in " + fileName + " pos " + undoPos);
+            }
+        }
+
+        return parseBlockUndo(new ByteArrayInputStream(undoData));
+    }
+
+    private BlockUndo readBlockUndoRaf(String fileName, int undoPos, byte[] prevBlockHash) throws IOException {
+        Path undoFile = blocksDir.resolve(fileName);
 
         try(RandomAccessFile raf = new RandomAccessFile(undoFile.toFile(), "r")) {
             raf.seek(undoPos - 4);
@@ -50,7 +94,7 @@ public class UndoReader {
             int undoSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
 
             if(undoSize < 0 || undoSize > MAX_UNDO_SIZE) {
-                throw new IOException("Invalid undo size " + undoSize + " at file " + fileNumber + " pos " + undoPos);
+                throw new IOException("Invalid undo size " + undoSize + " in " + fileName + " pos " + undoPos);
             }
 
             byte[] undoData = new byte[undoSize];
@@ -65,7 +109,7 @@ public class UndoReader {
 
                 byte[] computed = Sha256Hash.hashTwice(prevBlockHash, undoData);
                 if(!Arrays.equals(storedChecksum, computed)) {
-                    throw new IOException("Undo data checksum mismatch at file " + fileNumber + " pos " + undoPos);
+                    throw new IOException("Undo data checksum mismatch in " + fileName + " pos " + undoPos);
                 }
             }
 

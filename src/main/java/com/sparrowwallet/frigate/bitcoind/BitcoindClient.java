@@ -34,6 +34,7 @@ public class BitcoindClient {
     public static final int DEFAULT_SCRIPT_PUB_KEY_CACHE_SIZE = 10000000;
     private static final int MAX_REORG_DEPTH = 10;
     private static final int CONCURRENT_THRESHOLD = 100;
+    private static final int CACHE_POPULATE_WINDOW = 2000;
     public static final int MIN_SUBMIT_PACKAGE_VERSION = 280000;
 
     private final JsonRpcClient jsonRpcClient;
@@ -105,7 +106,7 @@ public class BitcoindClient {
 
         BlockDataSource dataSource = null;
         Path coreDataDirPath = coreDataDir.toPath();
-        if(FlatFileBlockDataSource.isAvailable(coreDataDirPath)) {
+        if(false && FlatFileBlockDataSource.isAvailable(coreDataDirPath)) {
             try {
                 Path blocksDir = FlatFileBlockDataSource.resolveBlocksDir(coreDataDirPath);
                 Path indexDir = blocksDir.resolve("index");
@@ -156,14 +157,18 @@ public class BitcoindClient {
         lastBlock = blockchainInfo.bestblockhash();
         int startHeight = blocksIndex.getLastBlockIndexed() + 1;
         int endHeight = Math.min(tip.height(), blockDataSource.getAvailableHeight());
-        log.info("Initializing indexes...");
-        long startTime = System.nanoTime();
+        int blocksToIndex = endHeight - startHeight + 1;
+        if(blocksToIndex > 0) {
+            log.info("Indexing {} blocks ({} to {})...", blocksToIndex, startHeight, endHeight);
+        } else {
+            log.info("Block index is up to date");
+        }
+        long startTime = System.currentTimeMillis();
         updateBlocksIndex();
-        int blocksIndexed = endHeight - startHeight + 1;
-        if(blocksIndexed > 0) {
-            long elapsedMs = (System.nanoTime() - startTime) / 1_000_000;
-            double blocksPerSec = blocksIndexed / (elapsedMs / 1000.0);
-            log.info("Indexed {} blocks ({} to {}) in {}.{}s ({} blocks/sec)", blocksIndexed, startHeight, endHeight, elapsedMs / 1000, String.format("%03d", elapsedMs % 1000), String.format("%.1f", blocksPerSec));
+        if(blocksToIndex > 0) {
+            long elapsedMs = System.currentTimeMillis() - startTime;
+            double blocksPerSec = blocksToIndex / (elapsedMs / 1000.0);
+            log.info("Indexed {} blocks in {}.{}s ({} blocks/sec)", blocksToIndex, elapsedMs / 1000, String.format("%03d", elapsedMs % 1000), String.format("%.1f", blocksPerSec));
         }
         updateMempoolIndex();
     }
@@ -180,6 +185,9 @@ public class BitcoindClient {
     }
 
     private void updateBlocksIndexSequential(int startHeight, int maxHeight) {
+        int totalBlocks = maxHeight - startHeight + 1;
+        long lastLogTime = System.currentTimeMillis();
+
         for(int i = startHeight; i <= maxHeight; i++) {
             BlockWithSpentOutputs blockData = blockDataSource.getBlockForIndexing(i);
             blockDataSource.populateCache(blockData);
@@ -204,6 +212,13 @@ public class BitcoindClient {
             if(!eligibleTransactions.isEmpty()) {
                 blocksIndex.addToIndex(eligibleTransactions);
             }
+
+            long now = System.currentTimeMillis();
+            if(now - lastLogTime >= 30_000) {
+                int blocksProcessed = i - startHeight + 1;
+                log.info("Indexing progress: {} / {} blocks (height {})", blocksProcessed, totalBlocks, i);
+                lastLogTime = now;
+            }
         }
 
         if(maxHeight >= startHeight) {
@@ -224,7 +239,7 @@ public class BitcoindClient {
         try {
             int totalBlocks = maxHeight - startHeight + 1;
             int blocksProcessed = 0;
-            long lastLogTime = System.nanoTime();
+            long lastLogTime = System.currentTimeMillis();
 
             for(int batchStart = startHeight; batchStart <= maxHeight; batchStart += batchSize) {
                 int batchEnd = Math.min(batchStart + batchSize - 1, maxHeight);
@@ -235,18 +250,19 @@ public class BitcoindClient {
                     futures.add(executor.submit(() -> processBlock(height)));
                 }
 
+                Map<BlockTransaction, byte[]> batchEligible = new LinkedHashMap<>();
                 for(int idx = 0; idx < futures.size(); idx++) {
                     int height = batchStart + idx;
                     try {
                         BlockIndexResult result = futures.get(idx).get();
 
-                        blockDataSource.populateCache(result.blockData());
+                        if(height > maxHeight - CACHE_POPULATE_WINDOW) {
+                            blockDataSource.populateCache(result.blockData());
+                        }
                         if(height > maxHeight - MAX_REORG_DEPTH) {
                             recentBlocksMap.put(height, result.blockHash());
                         }
-                        if(!result.eligibleTransactions().isEmpty()) {
-                            blocksIndex.addToIndex(result.eligibleTransactions());
-                        }
+                        batchEligible.putAll(result.eligibleTransactions());
                     } catch(ExecutionException e) {
                         throw new RuntimeException("Failed to index block " + height, e.getCause());
                     } catch(InterruptedException e) {
@@ -255,9 +271,13 @@ public class BitcoindClient {
                     }
                 }
 
+                if(!batchEligible.isEmpty()) {
+                    blocksIndex.addToIndex(batchEligible);
+                }
+
                 blocksProcessed += (batchEnd - batchStart + 1);
-                long now = System.nanoTime();
-                if(now - lastLogTime >= 30_000_000_000L) {
+                long now = System.currentTimeMillis();
+                if(now - lastLogTime >= 30_000) {
                     log.info("Indexing progress: {} / {} blocks (height {})", blocksProcessed, totalBlocks, batchEnd);
                     lastLogTime = now;
                 }

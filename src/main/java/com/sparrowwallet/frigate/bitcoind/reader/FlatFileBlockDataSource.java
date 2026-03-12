@@ -18,6 +18,7 @@ public class FlatFileBlockDataSource implements BlockDataSource {
     private static final Logger log = LoggerFactory.getLogger(FlatFileBlockDataSource.class);
 
     private final Path indexDir;
+    private final MappedBlockFiles mappedFiles;
     private final BlockFileReader blockReader;
     private final UndoReader undoReader;
     private final Map<HashIndex, byte[]> scriptPubKeyCache;
@@ -31,8 +32,9 @@ public class FlatFileBlockDataSource implements BlockDataSource {
     public FlatFileBlockDataSource(Path blocksDir, Path indexDir, Map<HashIndex, byte[]> scriptPubKeyCache) throws IOException {
         this.indexDir = indexDir;
         XorObfuscation xor = new XorObfuscation(blocksDir);
-        this.blockReader = new BlockFileReader(blocksDir, xor);
-        this.undoReader = new UndoReader(blocksDir, xor);
+        this.mappedFiles = new MappedBlockFiles(blocksDir);
+        this.blockReader = new BlockFileReader(blocksDir, xor, mappedFiles);
+        this.undoReader = new UndoReader(blocksDir, xor, mappedFiles);
         this.scriptPubKeyCache = scriptPubKeyCache;
         this.blockIndex = BlockIndex.load(indexDir.resolve("headers.dat"));
         log.info("Loaded flat file block index with {} entries (max height {})", blockIndex.size(), blockIndex.getMaxHeight());
@@ -130,7 +132,7 @@ public class FlatFileBlockDataSource implements BlockDataSource {
 
     @Override
     public void close() throws IOException {
-        // BlockFileReader and UndoReader open/close file handles per call, nothing to clean up
+        mappedFiles.close();
     }
 
     /**

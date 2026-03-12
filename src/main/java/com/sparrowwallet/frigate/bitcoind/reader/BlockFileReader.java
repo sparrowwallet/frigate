@@ -14,17 +14,50 @@ public class BlockFileReader {
 
     private final Path blocksDir;
     private final XorObfuscation xor;
+    private final MappedBlockFiles mappedFiles;
 
     public BlockFileReader(Path blocksDir, XorObfuscation xor) {
+        this(blocksDir, xor, null);
+    }
+
+    public BlockFileReader(Path blocksDir, XorObfuscation xor, MappedBlockFiles mappedFiles) {
         this.blocksDir = blocksDir;
         this.xor = xor;
+        this.mappedFiles = mappedFiles;
     }
 
     /**
      * Read raw block bytes from the given file number and data position.
      */
     public byte[] readBlock(int fileNumber, int dataPos) throws IOException {
-        Path blockFile = blocksDir.resolve(String.format("blk%05d.dat", fileNumber));
+        String fileName = String.format("blk%05d.dat", fileNumber);
+
+        if(mappedFiles != null) {
+            return readBlockMapped(fileName, dataPos);
+        }
+
+        return readBlockRaf(fileName, dataPos);
+    }
+
+    private byte[] readBlockMapped(String fileName, int dataPos) throws IOException {
+        byte[] sizeBytes = mappedFiles.read(fileName, dataPos - 4, 4);
+        if(sizeBytes == null) {
+            return readBlockRaf(fileName, dataPos);
+        }
+        xor.deobfuscate(sizeBytes, dataPos - 4);
+        int blockSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+
+        if(blockSize < 0 || blockSize > MAX_BLOCK_SIZE) {
+            throw new IOException("Invalid block size " + blockSize + " in " + fileName + " pos " + dataPos);
+        }
+
+        byte[] blockData = mappedFiles.read(fileName, dataPos, blockSize);
+        xor.deobfuscate(blockData, dataPos);
+        return blockData;
+    }
+
+    private byte[] readBlockRaf(String fileName, int dataPos) throws IOException {
+        Path blockFile = blocksDir.resolve(fileName);
 
         try(RandomAccessFile raf = new RandomAccessFile(blockFile.toFile(), "r")) {
             raf.seek(dataPos - 4);
@@ -34,7 +67,7 @@ public class BlockFileReader {
             int blockSize = ByteBuffer.wrap(sizeBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
 
             if(blockSize < 0 || blockSize > MAX_BLOCK_SIZE) {
-                throw new IOException("Invalid block size " + blockSize + " at file " + fileNumber + " pos " + dataPos);
+                throw new IOException("Invalid block size " + blockSize + " in " + fileName + " pos " + dataPos);
             }
 
             byte[] blockData = new byte[blockSize];
