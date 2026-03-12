@@ -106,7 +106,7 @@ public class BitcoindClient {
 
         BlockDataSource dataSource = null;
         Path coreDataDirPath = coreDataDir.toPath();
-        if(false && FlatFileBlockDataSource.isAvailable(coreDataDirPath)) {
+        if(FlatFileBlockDataSource.isAvailable(coreDataDirPath)) {
             try {
                 Path blocksDir = FlatFileBlockDataSource.resolveBlocksDir(coreDataDirPath);
                 Path indexDir = blocksDir.resolve("index");
@@ -327,7 +327,7 @@ public class BitcoindClient {
                 Transaction tx = new Transaction(hexFormat.parseHex(txHex));
                 for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
                     byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
-                    addtoScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
+                    addToScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
                 }
 
                 if(!tx.isCoinBase() && ScriptUtils.containsTaprootOutput(tx)) {
@@ -387,7 +387,7 @@ public class BitcoindClient {
                 String txHex = (String)bitcoindClientService.getRawTransaction(hashIndex.getHash().toString(), false);
                 Transaction tx = new Transaction(hexFormat.parseHex(txHex));
                 TransactionOutput txOutput = tx.getOutputs().get((int)hashIndex.getIndex());
-                addtoScriptPubKeyCache(hashIndex.getHash(), (int)hashIndex.getIndex(), txOutput.getScriptBytes());
+                addToScriptPubKeyCache(hashIndex.getHash(), (int)hashIndex.getIndex(), txOutput.getScriptBytes());
                 scriptPubKey = getFromScriptPubKeyCache(hashIndex);
             } catch(Exception e) {
                 log.error("Error retrieving scriptPubKey for txid " + hashIndex.getHash() + " output index " + hashIndex.getIndex(), e);
@@ -522,7 +522,7 @@ public class BitcoindClient {
         return null;
     }
 
-    private void addtoScriptPubKeyCache(Sha256Hash txid, int outputIndex, byte[] scriptPubKeyBytes) {
+    private void addToScriptPubKeyCache(Sha256Hash txid, int outputIndex, byte[] scriptPubKeyBytes) {
         HashIndex hashIndex = new HashIndex(txid, outputIndex);
         //Only cache if the length of the field matches one of the valid
         if(ScriptUtils.getValidScriptType(scriptPubKeyBytes) != null) {
