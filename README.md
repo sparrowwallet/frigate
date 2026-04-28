@@ -96,6 +96,20 @@ Silent Payments presents an alternative model, where instead of an incrementing 
 As such, new methods are necessary.
 Frigate proposes the following Electrum JSON-RPC methods:
 
+### server.features
+
+Servers supporting silent payments advertise the capability by including a `silent_payments` field in the `server.features` response:
+
+```json
+{
+  ...,
+  "silent_payments": [0]
+}
+```
+
+Each integer is a fully-specified silent payments protocol version supported by the server. 
+BIP352 defines version 0.
+
 ### blockchain.silentpayments.subscribe
 
 **Signature**
@@ -105,7 +119,7 @@ blockchain.silentpayments.subscribe(scan_private_key, spend_public_key, start, l
 
 - _scan_private_key_: A 64 character string containing the hex of the scan private key.
 - _spend_public_key_: A 66 character string containing the hex of the spend public key.
-- _start_: (Optional) Block height or timestamp to start scanning from. Values above 500,000,000 are treated as seconds from the start of the epoch.
+- _start_: (Optional) An integer block height to start scanning from, or a string of the form `"FROM-TO"` to specify a closed range of heights. Integer values above 500,000,000 are treated as seconds from the start of the epoch.
 - _labels_: (Optional) An array of positive integers specifying additional silent payment labels to scan for. Change (`m = 0`) is always included regardless. To aid in wallet recovery, this parameter should only be used for specialized applications. 
 
 **Result**
@@ -122,7 +136,9 @@ sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2
 
 Once subscribed, the client will receive notifications as results are returned from the scan with the following signature. 
 All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results.
-Once the client has received a notification with `progress` == `1.0`, it should consider the scan complete.
+A `progress` of `1.0` indicates the scan is up to date as of this notification.
+The first such notification marks the end of the historical scan; subsequent `1.0` notifications represent live updates as new blocks and mempool transactions are scanned.
+Clients should flush any buffered history on every `1.0` notification.
 
 ```
 blockchain.silentpayments.subscribe(subscription, progress, history)
@@ -178,8 +194,14 @@ A dictionary with the following key/value pairs:
 It is recommended that servers implementing this protocol send history results incrementally as the historical scan progresses.
 In addition, a maximum page size of 100 is suggested when sending historical transactions.
 This will avoid transmission issues with large wallets that have many transactions, while providing the client with regular progress updates.
+Servers should also emit a notification with empty `history` at regular intervals (e.g. every 5 seconds) during a historical scan, to keep the client updated on scanning progress.
 In the case of block reorgs, the server should rescan all existing subscriptions from the reorg-ed block height and send any history (if found) to the client.
 All found mempool transactions should be sent on the initial subscription, but thereafter previously sent mempool transactions should not be resent.
+When a mempool transaction confirms, the server sends a new notification containing the same `tx_hash` with non-zero `height`.
+Clients should treat the confirmed entry as canonical.
+
+Clients reconnecting with prior history should pass `start = lastSeenHeight - reorgLimit` to limit the rescan to a recent window.
+A reorg limit of 100 blocks is sufficient.
 
 Clients should retrieve the transactions listed in the history with `blockchain.transaction.get` and subscribe to all owned outputs with `blockchain.scripthash.subscribe`. 
 Electrum wallet functionality then proceeds as normal.
@@ -365,6 +387,8 @@ connect = true
 # batchSize = 300000             # rows per GPU dispatch (reduce if scanning hangs on older GPUs)
 # computeBackend = "AUTO"        # AUTO, GPU, or CPU
 # dbThreads = 4                  # limit DuckDB threads (reduces CPU load when computeBackend = "CPU")
+# maxLabels = 10                 # maximum number of labels accepted per silent payments subscription
+# maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
 
 [server]
 # port = 57001
@@ -398,6 +422,10 @@ With CPU-only scanning, `dbThreads` can be used to limit the number of DuckDB th
 
 The `batchSize` setting controls how many transactions are processed per GPU dispatch (default: 300,000).
 If scanning hangs or becomes unstable on certain GPUs (particularly older OpenCL-only GPUs), try reducing this value (e.g. 10,000 to 50,000).
+
+The `maxLabels` setting caps the number of labels accepted per silent payments subscription (default: 10).
+The `maxSubscriptions` setting caps the number of silent payments subscriptions per connection (default: 100).
+Requests exceeding either limit are rejected with a JSON-RPC `-32602 Invalid params` error.
 
 ### Server
 

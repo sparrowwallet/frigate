@@ -4,7 +4,7 @@ import com.google.common.eventbus.Subscribe;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsNotification;
-import com.sparrowwallet.frigate.index.TxEntry;
+import com.sparrowwallet.frigate.electrum.SilentPaymentsTxEntry;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,7 +16,7 @@ public class ScanProgress {
     private final String address;
     private final boolean canComplete;
     private final boolean showProgress;
-    private final List<TxEntry> results = new ArrayList<>();
+    private final List<SilentPaymentsTxEntry> results = new ArrayList<>();
 
     private volatile boolean isComplete = false;
     private volatile boolean isInitialComplete = false;

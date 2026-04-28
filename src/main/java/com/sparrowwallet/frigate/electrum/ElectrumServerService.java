@@ -14,13 +14,12 @@ import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.bitcoind.*;
 import com.sparrowwallet.frigate.index.IndexQuerier;
-import com.sparrowwallet.frigate.index.TxEntry;
+import com.sparrowwallet.frigate.io.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.ref.WeakReference;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @JsonRpcService
 public class ElectrumServerService {
@@ -28,6 +27,7 @@ public class ElectrumServerService {
     public static final Version MIN_VERSION = new Version("1.4");
     public static final Version MAX_DEFAULT_VERSION = new Version("1.4.2");
     public static final Version MAX_SUBMIT_PACKAGE_VERSION = new Version("1.6");
+    public static final List<Integer> SILENT_PAYMENTS_SUPPORTED_VERSIONS = List.of(0);
 
     private final BitcoindClient bitcoindClient;
     private final RequestHandler requestHandler;
@@ -104,7 +104,7 @@ public class ElectrumServerService {
     public ServerFeatures getServerFeatures() {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
-            return electrumBackendService.getServerFeatures();
+            return electrumBackendService.getServerFeatures().withSilentPayments(SILENT_PAYMENTS_SUPPORTED_VERSIONS);
         }
 
         throw new UnsupportedOperationException("Configure backendElectrumServer to use server.features");
@@ -444,10 +444,16 @@ public class ElectrumServerService {
     }
 
     @JsonRpcMethod("blockchain.silentpayments.subscribe")
-    public String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Object start, @JsonRpcParam("labels") @JsonRpcOptional Integer[] labels) {
+    public String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Object start, @JsonRpcParam("labels") @JsonRpcOptional Integer[] labels) throws InvalidParamsException {
         checkVersionNegotiated();
-        SilentPaymentScanAddress silentPaymentScanAddress = getSilentPaymentScanAddress(scanPrivateKey, spendPublicKey);
-        Set<Integer> labelSet = getLabels(labels);
+        SilentPaymentScanAddress silentPaymentScanAddress = parseScanAddress(scanPrivateKey, spendPublicKey);
+        Set<Integer> labelSet = parseLabels(labels);
+
+        int maxSubscriptions = Config.get().getScan().getMaxSubscriptions();
+        if(!requestHandler.isSilentPaymentsAddressSubscribed(silentPaymentScanAddress.toString()) && requestHandler.getSilentPaymentsSubscriptionCount() >= maxSubscriptions) {
+            throw new InvalidParamsException("subscription limit reached (" + maxSubscriptions + ") for this connection");
+        }
+
         requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress, labelSet);
 
         int[] heightRange = getHeightRange(start);
@@ -458,47 +464,102 @@ public class ElectrumServerService {
     }
 
     @JsonRpcMethod("blockchain.silentpayments.unsubscribe")
-    public String unsubscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey) {
+    public String unsubscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey) throws InvalidParamsException {
         checkVersionNegotiated();
-        SilentPaymentScanAddress silentPaymentScanAddress = getSilentPaymentScanAddress(scanPrivateKey, spendPublicKey);
+        SilentPaymentScanAddress silentPaymentScanAddress = parseScanAddress(scanPrivateKey, spendPublicKey);
         requestHandler.unsubscribeSilentPaymentsAddress(silentPaymentScanAddress);
 
         return silentPaymentScanAddress.getAddress();
     }
 
-    private static SilentPaymentScanAddress getSilentPaymentScanAddress(String scanPrivateKey, String spendPublicKey) {
-        ECKey scanKey = ECKey.fromPrivate(Utils.hexToBytes(scanPrivateKey));
-        ECKey spendKey = ECKey.fromPublicOnly(Utils.hexToBytes(spendPublicKey));
-        return SilentPaymentScanAddress.from(scanKey, spendKey);
+    private static SilentPaymentScanAddress parseScanAddress(String scanPrivateKey, String spendPublicKey) throws InvalidParamsException {
+        byte[] scanBytes;
+        byte[] spendBytes;
+        try {
+            scanBytes = Utils.hexToBytes(scanPrivateKey);
+            spendBytes = Utils.hexToBytes(spendPublicKey);
+        } catch(IllegalArgumentException e) {
+            throw new InvalidParamsException("scan_private_key or spend_public_key is not valid hex", e);
+        }
+        if(scanBytes.length != 32) {
+            throw new InvalidParamsException("scan_private_key must be 32 bytes");
+        }
+        if(spendBytes.length != 33) {
+            throw new InvalidParamsException("spend_public_key must be 33 bytes (compressed)");
+        }
+        try {
+            ECKey scanKey = ECKey.fromPrivate(scanBytes);
+            ECKey spendKey = ECKey.fromPublicOnly(spendBytes);
+            return SilentPaymentScanAddress.from(scanKey, spendKey);
+        } catch(IllegalArgumentException e) {
+            throw new InvalidParamsException("invalid scan/spend key: " + e.getMessage(), e);
+        }
     }
 
-    private int[] getHeightRange(Object start) {
-        if(start instanceof String s && s.contains("-")) {
-            String[] parts = s.split("-", 2);
-            return new int[] { Integer.parseInt(parts[0]), Integer.parseInt(parts[1]) };
+    private int[] getHeightRange(Object start) throws InvalidParamsException {
+        if(start == null) {
+            return new int[] { 0 };
         }
 
-        Long startLong = start instanceof Number n ? n.longValue() : null;
-        int startHeight = 0;
-        if(startLong != null) {
+        if(start instanceof String s) {
+            if(!s.contains("-")) {
+                throw new InvalidParamsException("start string must be of the form 'FROM-TO'");
+            }
+            String[] parts = s.split("-", 2);
+            int from;
+            int to;
+            try {
+                from = Integer.parseInt(parts[0]);
+                to = Integer.parseInt(parts[1]);
+            } catch(NumberFormatException e) {
+                throw new InvalidParamsException("start range must contain integer block heights", e);
+            }
+            if(from < 0 || to < from) {
+                throw new InvalidParamsException("start range must satisfy 0 <= from <= to");
+            }
+            int tip = bitcoindClient != null && bitcoindClient.getTip() != null ? bitcoindClient.getTip().height() : Integer.MAX_VALUE;
+            if(to > tip) {
+                throw new InvalidParamsException("start range 'to' (" + to + ") exceeds tip (" + tip + ")");
+            }
+            return new int[] { from, to };
+        }
+
+        if(start instanceof Number n) {
+            long startLong = n.longValue();
+            if(startLong < 0) {
+                throw new InvalidParamsException("start must be non-negative");
+            }
             if(startLong > Transaction.MAX_BLOCK_LOCKTIME) {
                 if(bitcoindClient == null) {
-                    throw new UnsupportedOperationException("Use a start block height instead of a timestamp when coreServer is not configured");
+                    throw new InvalidParamsException("timestamp start requires coreServer to be configured");
                 }
-                startHeight = bitcoindClient.findBlockByTimestamp(startLong);
-            } else if(startLong > 0) {
-                startHeight = startLong.intValue();
+                return new int[] { bitcoindClient.findBlockByTimestamp(startLong) };
             }
+            return new int[] { (int)startLong };
         }
-        return new int[] { startHeight };
+
+        throw new InvalidParamsException("start must be an integer or 'FROM-TO' string");
     }
 
-    private Set<Integer> getLabels(Integer[] labels) {
-        Set<Integer> labelSet = new HashSet<>();
+    private Set<Integer> parseLabels(Integer[] labels) throws InvalidParamsException {
+        int maxLabels = Config.get().getScan().getMaxLabels();
+        if(labels != null && labels.length > maxLabels) {
+            throw new InvalidParamsException("labels array exceeds " + maxLabels + " entries");
+        }
+
+        SortedSet<Integer> labelSet = new TreeSet<>();
         labelSet.add(0);
         if(labels != null) {
-            labelSet.addAll(Arrays.stream(labels).filter(Objects::nonNull).filter(integer -> integer.compareTo(0) > 0).collect(Collectors.toSet()));
+            for(Integer label : labels) {
+                if(label == null) {
+                    continue;
+                }
+                if(label <= 0) {
+                    throw new InvalidParamsException("label must satisfy 0 < label < 2^31, got " + label);
+                }
+                labelSet.add(label);
+            }
         }
-        return Collections.unmodifiableSet(labelSet);
+        return Collections.unmodifiableSortedSet(labelSet);
     }
 }

@@ -336,10 +336,14 @@ public class Config {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ScanConfig {
         public static final int DEFAULT_BATCH_SIZE = 300_000;
+        public static final int DEFAULT_MAX_LABELS = 10;
+        public static final int DEFAULT_MAX_SUBSCRIPTIONS = 100;
 
         private Integer batchSize;
         private String computeBackend;
         private Integer dbThreads;
+        private Integer maxLabels;
+        private Integer maxSubscriptions;
 
         public int getBatchSize() {
             return batchSize != null ? batchSize : DEFAULT_BATCH_SIZE;
@@ -347,6 +351,22 @@ public class Config {
 
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
+        }
+
+        public int getMaxLabels() {
+            return maxLabels != null ? maxLabels : DEFAULT_MAX_LABELS;
+        }
+
+        public void setMaxLabels(Integer maxLabels) {
+            this.maxLabels = maxLabels;
+        }
+
+        public int getMaxSubscriptions() {
+            return maxSubscriptions != null ? maxSubscriptions : DEFAULT_MAX_SUBSCRIPTIONS;
+        }
+
+        public void setMaxSubscriptions(Integer maxSubscriptions) {
+            this.maxSubscriptions = maxSubscriptions;
         }
 
         @JsonIgnore

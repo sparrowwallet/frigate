@@ -12,6 +12,7 @@ import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.SubscriptionStatus;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsNotification;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsSubscription;
+import com.sparrowwallet.frigate.electrum.SilentPaymentsTxEntry;
 import com.sparrowwallet.frigate.io.ComputeBackend;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Storage;
@@ -27,7 +28,6 @@ import java.math.BigInteger;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 public class Index {
@@ -265,8 +265,8 @@ public class Index {
         }
     }
 
-    public List<TxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
-        ConcurrentLinkedQueue<TxEntry> queue = new ConcurrentLinkedQueue<>();
+    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+        ConcurrentLinkedQueue<SilentPaymentsTxEntry> queue = new ConcurrentLinkedQueue<>();
         byte[] scanKeyBytes = Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes());
 
         try {
@@ -296,8 +296,8 @@ public class Index {
 
                                 double progress = pollScanProgress(scanKeyBytes);
 
-                                List<TxEntry> history = new ArrayList<>();
-                                TxEntry entry;
+                                List<SilentPaymentsTxEntry> history = new ArrayList<>();
+                                SilentPaymentsTxEntry entry;
                                 while((entry = queue.poll()) != null) {
                                     history.add(entry);
                                     if(history.size() >= HISTORY_PAGE_SIZE) {
@@ -319,7 +319,7 @@ public class Index {
                             byte[] txid = resultSet.getBytes(1);
                             byte[] tweak_key = compressRawKey(resultSet.getBytes(2));
                             int height = resultSet.getInt(3);
-                            queue.offer(new TxEntry(height, 0, Utils.bytesToHex(txid), Utils.bytesToHex(tweak_key)));
+                            queue.offer(new SilentPaymentsTxEntry(height, Utils.bytesToHex(txid), Utils.bytesToHex(tweak_key)));
                         }
                     }
                 }
@@ -342,8 +342,8 @@ public class Index {
             return Collections.emptyList();
         }
 
-        List<TxEntry> history = new ArrayList<>();
-        TxEntry entry;
+        List<SilentPaymentsTxEntry> history = new ArrayList<>();
+        SilentPaymentsTxEntry entry;
         while((entry = queue.poll()) != null) {
             history.add(entry);
         }

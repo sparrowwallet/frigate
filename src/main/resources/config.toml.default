@@ -16,6 +16,8 @@ connect = true
 # batchSize = 300000             # rows per GPU dispatch (reduce if scanning hangs on older GPUs)
 # computeBackend = "AUTO"        # AUTO, GPU, or CPU (AUTO prefers GPU over CPU)
 # dbThreads = 4                  # limit DuckDB threads (reduces CPU load when computeBackend = "CPU")
+# maxLabels = 10                 # maximum number of labels accepted per silent payments subscription
+# maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
 
 [server]
 # port = 57001

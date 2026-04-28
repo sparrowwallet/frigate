@@ -1,7 +1,7 @@
 package com.sparrowwallet.frigate.bitcoind;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
-import com.sparrowwallet.frigate.index.TxEntry;
+import com.sparrowwallet.frigate.electrum.TxEntry;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record MempoolEntry(int vsize, int ancestorsize, boolean bip125_replaceable, FeesMempoolEntry fees) {

@@ -158,6 +158,10 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         silentPaymentsAddressesSubscribed.remove(silentPaymentsScanAddress.toString());
     }
 
+    public int getSilentPaymentsSubscriptionCount() {
+        return silentPaymentsAddressesSubscribed.size();
+    }
+
     @Override
     public boolean isSilentPaymentsAddressSubscribed(String silentPaymentsAddress) {
         return silentPaymentsAddressesSubscribed.containsKey(silentPaymentsAddress);
@@ -191,7 +195,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     public void silentPaymentsNotification(SilentPaymentsNotification notification) {
         if(isSilentPaymentsAddressSubscribed(notification.subscription().address()) && notification.status() == this) {
             SilentPaymentAddressSubscription subscription = silentPaymentsAddressesSubscribed.get(notification.subscription().address());
-            subscription.setHighestBlockHeight(notification.history().stream().mapToInt(TxEntry::getHeight).max().orElse(subscription.getHighestBlockHeight()));
+            subscription.setHighestBlockHeight(notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).max().orElse(subscription.getHighestBlockHeight()));
             subscription.getMempoolTxids().addAll(notification.history().stream().filter(txEntry -> txEntry.height <= 0).map(txEntry -> Sha256Hash.wrap(txEntry.tx_hash)).collect(Collectors.toSet()));
 
             try {

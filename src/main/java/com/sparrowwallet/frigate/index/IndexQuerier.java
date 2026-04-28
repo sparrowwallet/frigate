@@ -7,6 +7,7 @@ import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.SubscriptionStatus;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsNotification;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsSubscription;
+import com.sparrowwallet.frigate.electrum.SilentPaymentsTxEntry;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -41,8 +42,8 @@ public class IndexQuerier {
     public void startHistoryScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, Set<Integer> labelSet, WeakReference<SubscriptionStatus> subscriptionStatusRef, boolean postIfEmpty) {
         queryPool.submit(() -> {
             SilentPaymentsSubscription subscription = new SilentPaymentsSubscription(scanAddress.toString(), labelSet.toArray(new Integer[0]), startHeight == null ? 0 : startHeight);
-            List<TxEntry> history = blocksIndex.getHistoryAsync(scanAddress, subscription, startHeight, endHeight, subscriptionStatusRef);
-            List<TxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, subscription);
+            List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, subscription, startHeight, endHeight, subscriptionStatusRef);
+            List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, subscription);
             history.addAll(mempoolHistory);
 
             if(postIfEmpty || !history.isEmpty()) {
@@ -54,7 +55,7 @@ public class IndexQuerier {
     public void startMempoolScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, Set<Integer> labelSet, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
         queryPool.submit(() -> {
             SilentPaymentsSubscription subscription = new SilentPaymentsSubscription(scanAddress.toString(), labelSet.toArray(new Integer[0]), startHeight == null ? 0 : startHeight);
-            List<TxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, subscription);
+            List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, subscription);
 
             if(!mempoolHistory.isEmpty()) {
                 Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, PROGRESS_COMPLETE, new ArrayList<>(mempoolHistory), subscriptionStatusRef.get()));
@@ -62,8 +63,8 @@ public class IndexQuerier {
         });
     }
 
-    private List<TxEntry> getMempoolHistory(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef, SilentPaymentsSubscription subscription) {
-        List<TxEntry> mempoolHistory = mempoolIndex.getHistoryAsync(scanAddress, subscription, null, null, subscriptionStatusRef);
+    private List<SilentPaymentsTxEntry> getMempoolHistory(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef, SilentPaymentsSubscription subscription) {
+        List<SilentPaymentsTxEntry> mempoolHistory = mempoolIndex.getHistoryAsync(scanAddress, subscription, null, null, subscriptionStatusRef);
         SubscriptionStatus subscriptionStatus = subscriptionStatusRef.get();
         if(subscriptionStatus != null && subscriptionStatus.getSilentPaymentsMempoolTxids(scanAddress.toString()) != null) {
             mempoolHistory.removeIf(txEntry -> subscriptionStatus.getSilentPaymentsMempoolTxids(scanAddress.toString()).contains(Sha256Hash.wrap(txEntry.tx_hash)));
