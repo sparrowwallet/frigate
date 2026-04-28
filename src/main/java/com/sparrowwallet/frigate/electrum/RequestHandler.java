@@ -195,7 +195,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     public void silentPaymentsNotification(SilentPaymentsNotification notification) {
         if(isSilentPaymentsAddressSubscribed(notification.subscription().address()) && notification.status() == this) {
             SilentPaymentAddressSubscription subscription = silentPaymentsAddressesSubscribed.get(notification.subscription().address());
-            subscription.setHighestBlockHeight(notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).max().orElse(subscription.getHighestBlockHeight()));
+            notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).filter(h -> h > 0).max().ifPresent(h -> subscription.setHighestBlockHeight(Math.max(subscription.getHighestBlockHeight(), h)));
             subscription.getMempoolTxids().addAll(notification.history().stream().filter(txEntry -> txEntry.height <= 0).map(txEntry -> Sha256Hash.wrap(txEntry.tx_hash)).collect(Collectors.toSet()));
 
             try {
