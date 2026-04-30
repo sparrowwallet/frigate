@@ -9,6 +9,7 @@ import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumServerService;
 import com.sparrowwallet.frigate.electrum.ElectrumTransport;
+import com.sparrowwallet.frigate.electrum.SilentPaymentsSubscription;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,13 +86,13 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
         JsonRpcClient jsonRpcClient = new JsonRpcClient(getTransport());
         ElectrumClientService electrumClientService = jsonRpcClient.onDemand(ElectrumClientService.class);
         electrumClientService.getServerVersion(APP_NAME, ElectrumServerService.MIN_VERSION.get());
-        String address = electrumClientService.subscribeSilentPayments(scanPrivateKey, spendPublicKey, start, labels);
+        SilentPaymentsSubscription subscription = electrumClientService.subscribeSilentPayments(scanPrivateKey, spendPublicKey, start, labels);
 
         try {
-            ScanProgress scanProgress = new ScanProgress(address, !follow, !quiet);
+            ScanProgress scanProgress = new ScanProgress(subscription.address(), !follow, !quiet);
             getEventBus().register(scanProgress);
             if(!quiet) {
-                System.out.println("Scanning address " + address + "...");
+                System.out.println("Scanning address " + subscription.address() + "...");
             }
             scanProgress.waitForCompletion();
             getEventBus().unregister(scanProgress);

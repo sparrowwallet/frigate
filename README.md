@@ -124,12 +124,19 @@ blockchain.silentpayments.subscribe(scan_private_key, spend_public_key, start, l
 
 **Result**
 
-The silent payment address that has been subscribed.
+A `subscription` JSON object literal containing details of the current subscription:
+- _address_: The silent payment address that has been subscribed to.
+- _labels_: An array of the labels that are subscribed to (must include `0`).
+- _start_height_: The block height from which the subscription scan was started.
 
 **Result Example**
 
-```
-sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv
+```json
+{
+  "address": "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+  "labels": [0],
+  "start_height": 882000
+}
 ```
 
 ### Notifications

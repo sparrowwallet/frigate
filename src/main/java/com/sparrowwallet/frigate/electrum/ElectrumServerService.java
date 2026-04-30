@@ -444,7 +444,7 @@ public class ElectrumServerService {
     }
 
     @JsonRpcMethod("blockchain.silentpayments.subscribe")
-    public String subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Object start, @JsonRpcParam("labels") @JsonRpcOptional Integer[] labels) throws InvalidParamsException {
+    public SilentPaymentsSubscription subscribeSilentPayments(@JsonRpcParam("scan_private_key") String scanPrivateKey, @JsonRpcParam("spend_public_key") String spendPublicKey, @JsonRpcParam("start") @JsonRpcOptional Object start, @JsonRpcParam("labels") @JsonRpcOptional Integer[] labels) throws InvalidParamsException {
         checkVersionNegotiated();
         SilentPaymentScanAddress silentPaymentScanAddress = parseScanAddress(scanPrivateKey, spendPublicKey);
         Set<Integer> labelSet = parseLabels(labels);
@@ -460,7 +460,7 @@ public class ElectrumServerService {
         Integer endHeight = heightRange.length > 1 ? heightRange[1] : null;
         indexQuerier.startHistoryScan(silentPaymentScanAddress, heightRange[0], endHeight, labelSet, new WeakReference<>(requestHandler));
 
-        return silentPaymentScanAddress.getAddress();
+        return new SilentPaymentsSubscription(silentPaymentScanAddress.getAddress(), labelSet.toArray(new Integer[0]), heightRange[0]);
     }
 
     @JsonRpcMethod("blockchain.silentpayments.unsubscribe")
