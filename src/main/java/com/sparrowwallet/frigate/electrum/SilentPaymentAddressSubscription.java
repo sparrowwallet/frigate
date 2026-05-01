@@ -9,13 +9,19 @@ import java.util.Set;
 public class SilentPaymentAddressSubscription {
     private final SilentPaymentScanAddress address;
     private final Set<Integer> labels;
+    private final int startHeight;
     private int highestBlockHeight;
     private final Set<Sha256Hash> mempoolTxids = new HashSet<>();
     private volatile boolean active;
 
-    public SilentPaymentAddressSubscription(SilentPaymentScanAddress address, Set<Integer> labels) {
+    public SilentPaymentAddressSubscription(SilentPaymentScanAddress address, Set<Integer> labels, int startHeight) {
         this.address = address;
         this.labels = labels;
+        this.startHeight = startHeight;
+    }
+
+    public int getStartHeight() {
+        return startHeight;
     }
 
     public boolean isActive() {

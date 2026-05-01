@@ -129,6 +129,11 @@ A `subscription` JSON object literal containing details of the current subscript
 - _labels_: An array of the labels that are subscribed to (must include `0`).
 - _start_height_: The block height from which the subscription scan was started.
 
+If a subscription for the same scan address already exists on the connection, servers **must not** narrow its coverage.
+If the new request's resolved start height is greater than the existing subscription's `start_height`, the server retains the existing wider start and returns it as `start_height` in the response.
+Clients should treat the returned `start_height` as authoritative.
+On every subscribe (including re-subscribe to the same address), the server **must** re-run the historical scan from the returned `start_height` and emit notifications as usual, so that clients which clear their local cache on re-subscribe are repopulated.
+
 **Result Example**
 
 ```json

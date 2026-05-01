@@ -454,11 +454,18 @@ public class ElectrumServerService {
             throw new InvalidParamsException("subscription limit reached (" + maxSubscriptions + ") for this connection");
         }
 
-        requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress, labelSet);
-
         int[] heightRange = getHeightRange(start);
-        int startHeight = heightRange[0];
+        int requestedStart = heightRange[0];
         Integer endHeight = heightRange.length > 1 ? heightRange[1] : null;
+
+        int effectiveStart = requestedStart;
+        SilentPaymentAddressSubscription existing = requestHandler.getSilentPaymentsAddressSubscription(silentPaymentScanAddress.toString());
+        if(existing != null && existing.getStartHeight() < requestedStart) {
+            effectiveStart = existing.getStartHeight();
+        }
+
+        int startHeight = effectiveStart;
+        requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress, labelSet, startHeight);
 
         requestHandler.runAfterResponse(() -> {
             SilentPaymentAddressSubscription subscription = requestHandler.getSilentPaymentsAddressSubscription(silentPaymentScanAddress.toString());
