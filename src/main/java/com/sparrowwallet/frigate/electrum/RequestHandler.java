@@ -19,6 +19,8 @@ import java.io.*;
 import java.lang.ref.WeakReference;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -39,6 +41,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     private boolean headersSubscribed;
     private final Set<String> scriptHashesSubscribed = new HashSet<>();
     private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new HashMap<>();
+    private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
 
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
         this.clientSocket = clientSocket;
@@ -68,6 +71,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
 
             while(true) {
+                postResponseTasks.clear();
+
                 String request = reader.readLine();
                 if(request == null) {
                     break;
@@ -82,6 +87,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
                 String response = rpcServer.handle(request, electrumServerService);
                 out.println(response);
                 out.flush();
+
+                runPostResponseTasks();
             }
         } catch(IOException e) {
             log.error("Could not communicate with client socket", e);
@@ -158,6 +165,25 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         silentPaymentsAddressesSubscribed.remove(silentPaymentsScanAddress.toString());
     }
 
+    public SilentPaymentAddressSubscription getSilentPaymentsAddressSubscription(String silentPaymentsAddress) {
+        return silentPaymentsAddressesSubscribed.get(silentPaymentsAddress);
+    }
+
+    public void runAfterResponse(Runnable task) {
+        postResponseTasks.add(task);
+    }
+
+    private void runPostResponseTasks() {
+        while(!postResponseTasks.isEmpty()) {
+            Runnable task = postResponseTasks.poll();
+            try {
+                task.run();
+            } catch(Exception e) {
+                log.error("Error running post-response task", e);
+            }
+        }
+    }
+
     public int getSilentPaymentsSubscriptionCount() {
         return silentPaymentsAddressesSubscribed.size();
     }
@@ -195,6 +221,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     public void silentPaymentsNotification(SilentPaymentsNotification notification) {
         if(isSilentPaymentsAddressSubscribed(notification.subscription().address()) && notification.status() == this) {
             SilentPaymentAddressSubscription subscription = silentPaymentsAddressesSubscribed.get(notification.subscription().address());
+            if(!subscription.isActive()) {
+                return;
+            }
             notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).filter(h -> h > 0).max().ifPresent(h -> subscription.setHighestBlockHeight(Math.max(subscription.getHighestBlockHeight(), h)));
             subscription.getMempoolTxids().addAll(notification.history().stream().filter(txEntry -> txEntry.height <= 0).map(txEntry -> Sha256Hash.wrap(txEntry.tx_hash)).collect(Collectors.toSet()));
 
@@ -215,7 +244,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     @Subscribe
     public void silentPaymentsBlocksIndexUpdate(SilentPaymentsBlocksIndexUpdate update) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
-            if(update.fromBlockHeight() > subscription.getHighestBlockHeight()) {
+            if(subscription.isActive() && update.fromBlockHeight() > subscription.getHighestBlockHeight()) {
                 electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), update.fromBlockHeight(), null, subscription.getLabels(), new WeakReference<>(this), false);
             }
         }
@@ -224,7 +253,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     @Subscribe
     public void silentPaymentsMempoolIndexAdded(SilentPaymentsMempoolIndexAdded added) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
-            electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, subscription.getLabels(), new WeakReference<>(this));
+            if(subscription.isActive()) {
+                electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, subscription.getLabels(), new WeakReference<>(this));
+            }
         }
     }
 

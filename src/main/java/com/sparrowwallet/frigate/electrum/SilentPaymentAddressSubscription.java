@@ -11,10 +11,19 @@ public class SilentPaymentAddressSubscription {
     private final Set<Integer> labels;
     private int highestBlockHeight;
     private final Set<Sha256Hash> mempoolTxids = new HashSet<>();
+    private volatile boolean active;
 
     public SilentPaymentAddressSubscription(SilentPaymentScanAddress address, Set<Integer> labels) {
         this.address = address;
         this.labels = labels;
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
     }
 
     public SilentPaymentScanAddress getAddress() {

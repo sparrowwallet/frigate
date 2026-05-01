@@ -457,10 +457,19 @@ public class ElectrumServerService {
         requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress, labelSet);
 
         int[] heightRange = getHeightRange(start);
+        int startHeight = heightRange[0];
         Integer endHeight = heightRange.length > 1 ? heightRange[1] : null;
-        indexQuerier.startHistoryScan(silentPaymentScanAddress, heightRange[0], endHeight, labelSet, new WeakReference<>(requestHandler));
 
-        return new SilentPaymentsSubscription(silentPaymentScanAddress.getAddress(), labelSet.toArray(new Integer[0]), heightRange[0]);
+        requestHandler.runAfterResponse(() -> {
+            SilentPaymentAddressSubscription subscription = requestHandler.getSilentPaymentsAddressSubscription(silentPaymentScanAddress.toString());
+            if(subscription == null) {
+                return;
+            }
+            subscription.setActive(true);
+            indexQuerier.startHistoryScan(silentPaymentScanAddress, startHeight, endHeight, labelSet, new WeakReference<>(requestHandler));
+        });
+
+        return new SilentPaymentsSubscription(silentPaymentScanAddress.getAddress(), labelSet.toArray(new Integer[0]), startHeight);
     }
 
     @JsonRpcMethod("blockchain.silentpayments.unsubscribe")
