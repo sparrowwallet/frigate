@@ -28,6 +28,8 @@ import java.math.BigInteger;
 import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import java.util.stream.Collectors;
 
 public class Index {
@@ -40,13 +42,13 @@ public class Index {
     private static final String AUDIT_SPEND_KEY_ENV = "FRIGATE_AUDIT_SPEND_KEY";
 
     private final DbManager dbManager;
-    private volatile int lastBlockIndexed = -1;
+    private final AtomicInteger lastBlockIndexed = new AtomicInteger(-1);
     private final int batchSize;
     private final ECKey auditScanKey;
     private final ECKey auditSpendKey;
 
     public Index(int startHeight, boolean inMemory, int batchSize) {
-        lastBlockIndexed = Math.max(lastBlockIndexed, startHeight - 1);
+        lastBlockIndexed.accumulateAndGet(startHeight - 1, Math::max);
         this.batchSize = batchSize;
 
         String scanKeyHex = System.getenv(AUDIT_SCAN_KEY_ENV);
@@ -146,12 +148,12 @@ public class Index {
             return dbManager.executeRead(connection -> {
                 try(PreparedStatement statement = connection.prepareStatement("SELECT MAX(height) from " + TWEAK_TABLE)) {
                     ResultSet resultSet = statement.executeQuery();
-                    return resultSet.next() ? Math.max(lastBlockIndexed, resultSet.getInt(1)) : lastBlockIndexed;
+                    return resultSet.next() ? Math.max(lastBlockIndexed.get(), resultSet.getInt(1)) : lastBlockIndexed.get();
                 }
             });
         } catch(Exception e) {
             log.error("Error getting last block indexed", e);
-            return lastBlockIndexed;
+            return lastBlockIndexed.get();
         }
     }
 
@@ -160,9 +162,9 @@ public class Index {
             return;
         }
 
-        int fromBlockHeight = lastBlockIndexed;
+        int fromBlockHeight = lastBlockIndexed.get();
         try {
-            lastBlockIndexed = dbManager.executeWrite(connection -> {
+            int newLastBlockIndexed = dbManager.executeWrite(connection -> {
                 DuckDBConnection duckDBConnection = (DuckDBConnection)connection;
                 try(DuckDBAppender appender = duckDBConnection.createAppender(DuckDBConnection.DEFAULT_SCHEMA, TWEAK_TABLE)) {
                     int blockHeight = -1;
@@ -192,7 +194,7 @@ public class Index {
                         blockHeight = Math.max(blockHeight, blkTx.getHeight());
                     }
 
-                    if(blockHeight <= 0 && lastBlockIndexed < 0) {
+                    if(blockHeight <= 0 && lastBlockIndexed.get() < 0) {
                         log.info("Indexed " + transactions.size() + " mempool transactions");
                     } else if(blockHeight > 0) {
                         log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
@@ -201,11 +203,12 @@ public class Index {
                     return blockHeight;
                 }
             });
+            lastBlockIndexed.set(newLastBlockIndexed);
 
-            if(lastBlockIndexed <= 0) {
+            if(newLastBlockIndexed <= 0) {
                 Frigate.getEventBus().post(new SilentPaymentsMempoolIndexAdded(transactions.keySet().stream().map(blkTx -> blkTx.getTransaction().getTxId()).collect(Collectors.toSet())));
             } else {
-                Frigate.getEventBus().post(new SilentPaymentsBlocksIndexUpdate(fromBlockHeight + 1, lastBlockIndexed, transactions.size()));
+                Frigate.getEventBus().post(new SilentPaymentsBlocksIndexUpdate(fromBlockHeight + 1, newLastBlockIndexed, transactions.size()));
             }
         } catch(Exception e) {
             log.error("Error adding to index", e);
@@ -236,6 +239,7 @@ public class Index {
                     return statement.execute();
                 }
             });
+            lastBlockIndexed.accumulateAndGet(startHeight - 1, Math::min);
         } catch(Exception e) {
             log.error("Error removing from index", e);
         }
@@ -265,7 +269,7 @@ public class Index {
         }
     }
 
-    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef, BooleanSupplier cancelled) {
         ConcurrentLinkedQueue<SilentPaymentsTxEntry> queue = new ConcurrentLinkedQueue<>();
         byte[] scanKeyBytes = Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes());
 
@@ -274,7 +278,7 @@ public class Index {
                 String sql = getSql(subscription, startHeight, endHeight);
 
                 try(DuckDBPreparedStatement statement = connection.prepareStatement(sql).unwrap(DuckDBPreparedStatement.class)) {
-                    if(isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+                    if(isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
                         return false;
                     }
 
@@ -288,7 +292,7 @@ public class Index {
                     })) {
                         queryProgressExecutor.scheduleAtFixedRate(() -> {
                             try {
-                                if(dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+                                if(dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
                                     statement.cancel();
                                     queryProgressExecutor.shutdownNow();
                                     return;
@@ -338,7 +342,7 @@ public class Index {
             return Collections.emptyList();
         }
 
-        if(isUnsubscribed(scanAddress, subscriptionStatusRef)) {
+        if(isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
             return Collections.emptyList();
         }
 

@@ -8,7 +8,8 @@ import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.SubscriptionStatus;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
-import com.sparrowwallet.frigate.bitcoind.BlockReorgEvent;
+import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncStart;
+import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncComplete;
 import com.sparrowwallet.frigate.index.*;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Server;
@@ -21,10 +22,10 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -39,8 +40,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
 
     private boolean connected;
     private boolean headersSubscribed;
-    private final Set<String> scriptHashesSubscribed = new HashSet<>();
-    private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new HashMap<>();
+    private final Set<String> scriptHashesSubscribed = ConcurrentHashMap.newKeySet();
+    private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new ConcurrentHashMap<>();
     private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
 
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
@@ -158,11 +159,18 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     }
 
     public void subscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress, Set<Integer> labelSet, int startHeight) {
+        SilentPaymentAddressSubscription previous = silentPaymentsAddressesSubscribed.get(silentPaymentsScanAddress.toString());
+        if(previous != null) {
+            previous.invalidateInFlightScans();
+        }
         silentPaymentsAddressesSubscribed.put(silentPaymentsScanAddress.toString(), new SilentPaymentAddressSubscription(silentPaymentsScanAddress, labelSet, startHeight));
     }
 
     public void unsubscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress) {
-        silentPaymentsAddressesSubscribed.remove(silentPaymentsScanAddress.toString());
+        SilentPaymentAddressSubscription previous = silentPaymentsAddressesSubscribed.remove(silentPaymentsScanAddress.toString());
+        if(previous != null) {
+            previous.invalidateInFlightScans();
+        }
     }
 
     public SilentPaymentAddressSubscription getSilentPaymentsAddressSubscription(String silentPaymentsAddress) {
@@ -224,7 +232,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             if(!subscription.isActive()) {
                 return;
             }
-            notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).filter(h -> h > 0).max().ifPresent(h -> subscription.setHighestBlockHeight(Math.max(subscription.getHighestBlockHeight(), h)));
+            notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).filter(h -> h > 0).max().ifPresent(subscription::accumulateMaxBlockHeight);
             subscription.getMempoolTxids().addAll(notification.history().stream().filter(txEntry -> txEntry.height <= 0).map(txEntry -> Sha256Hash.wrap(txEntry.tx_hash)).collect(Collectors.toSet()));
 
             try {
@@ -244,8 +252,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     @Subscribe
     public void silentPaymentsBlocksIndexUpdate(SilentPaymentsBlocksIndexUpdate update) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
-            if(subscription.isActive() && update.fromBlockHeight() > subscription.getHighestBlockHeight()) {
-                electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), update.fromBlockHeight(), null, subscription.getLabels(), new WeakReference<>(this), false);
+            if(subscription.isActive() && !subscription.isPendingHistoricalRescan() && update.fromBlockHeight() > subscription.getHighestBlockHeight()) {
+                electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), update.fromBlockHeight(), null, subscription, new WeakReference<>(this), false);
             }
         }
     }
@@ -254,7 +262,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     public void silentPaymentsMempoolIndexAdded(SilentPaymentsMempoolIndexAdded added) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
             if(subscription.isActive()) {
-                electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, subscription.getLabels(), new WeakReference<>(this));
+                electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, subscription, new WeakReference<>(this));
             }
         }
     }
@@ -267,9 +275,24 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     }
 
     @Subscribe
-    public void blockReorgEvent(BlockReorgEvent event) {
+    public void blockReorgSyncStart(BlockReorgSyncStart event) {
+        int reorgPoint = event.reorgStartHeight() - 1;
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
-            subscription.setHighestBlockHeight(event.startHeight() - 1);
+            subscription.invalidateInFlightScans();
+            subscription.accumulateMinBlockHeight(reorgPoint);
+            if(subscription.isActive() && !subscription.isHistoricalComplete()) {
+                subscription.markPendingHistoricalRescan();
+            }
+        }
+    }
+
+    @Subscribe
+    public void blockReorgSyncComplete(BlockReorgSyncComplete event) {
+        for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
+            if(subscription.isActive() && subscription.consumePendingHistoricalRescan()) {
+                int scanFrom = subscription.getHighestBlockHeight() + 1;
+                electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), scanFrom, null, subscription, new WeakReference<>(this), true);
+            }
         }
     }
 

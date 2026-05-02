@@ -297,9 +297,10 @@ public class BitcoindClient {
                             log.info("Reorg detected of last block, block height " + tip.height() + " was " + lastBlock + " and now is " + blockhash);
                         }
 
-                        Frigate.getEventBus().post(new BlockReorgEvent(reorgStartHeight));
+                        Frigate.getEventBus().post(new BlockReorgSyncStart(reorgStartHeight));
                         blocksIndex.removeFromIndex(reorgStartHeight + 1);
                         updateBlocksIndex();
+                        Frigate.getEventBus().post(new BlockReorgSyncComplete(reorgStartHeight));
 
                         lastBlock = null;
                     }

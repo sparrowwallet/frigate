@@ -473,7 +473,7 @@ public class ElectrumServerService {
                 return;
             }
             subscription.setActive(true);
-            indexQuerier.startHistoryScan(silentPaymentScanAddress, startHeight, endHeight, labelSet, new WeakReference<>(requestHandler));
+            indexQuerier.startHistoryScan(silentPaymentScanAddress, startHeight, endHeight, subscription, new WeakReference<>(requestHandler), true);
         });
 
         return new SilentPaymentsSubscription(silentPaymentScanAddress.getAddress(), labelSet.toArray(new Integer[0]), startHeight);
