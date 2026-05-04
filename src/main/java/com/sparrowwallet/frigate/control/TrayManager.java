@@ -94,7 +94,7 @@ public class TrayManager {
             NumberFormat nf = NumberFormat.getIntegerInstance();
             statusItem.setLabel("Indexing: block " + nf.format(indexedHeight) + " / " + nf.format(tipHeight));
         } else {
-            statusItem.setLabel("Electrum server on port " + Config.get().getServer().getPort());
+            statusItem.setLabel("Electrum server on port " + Config.get().getServer().getTcpPort());
         }
     }
 

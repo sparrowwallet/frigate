@@ -1,5 +1,6 @@
 package com.sparrowwallet.frigate.io;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -401,15 +402,25 @@ public class Config {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ServerConfig {
-        private Integer port;
+        private String host;
+        @JsonAlias("port")
+        private Integer tcpPort;
         private String backendElectrumServer;
 
-        public int getPort() {
-            return port != null ? port : com.sparrowwallet.frigate.electrum.ElectrumServerRunnable.DEFAULT_PORT;
+        public String getHost() {
+            return host != null ? host : "localhost";
         }
 
-        public void setPort(Integer port) {
-            this.port = port;
+        public void setHost(String host) {
+            this.host = host;
+        }
+
+        public int getTcpPort() {
+            return tcpPort != null ? tcpPort : com.sparrowwallet.frigate.electrum.ElectrumServerRunnable.DEFAULT_PORT;
+        }
+
+        public void setTcpPort(Integer tcpPort) {
+            this.tcpPort = tcpPort;
         }
 
         public String getBackendElectrumServer() {

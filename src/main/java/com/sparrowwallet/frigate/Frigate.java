@@ -61,7 +61,7 @@ public class Frigate {
             bitcoindClient.initialize();
         }
 
-        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex), config.getServer().getPort());
+        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex), config.getServer().getTcpPort());
         Thread electrumServerThread = new Thread(electrumServer, "Frigate Electrum Server");
         electrumServerThread.setDaemon(false);
         electrumServerThread.start();
@@ -189,8 +189,8 @@ public class Frigate {
                 return "Cannot connect to Bitcoin Core at " + server + ". Ensure Bitcoin Core is running and the server URL in config.toml is correct, or set connect = false under [core].";
             }
             if(current instanceof BindException) {
-                int port = Config.get().getServer().getPort();
-                return "Port " + port + " is already in use. Another Frigate instance may be running, or change the port under [server] in config.toml.";
+                int port = Config.get().getServer().getTcpPort();
+                return "Port " + port + " is already in use. Another Frigate instance may be running, or change tcpPort under [server] in config.toml.";
             }
             if(current instanceof IOException ioe && ioe.getMessage() != null) {
                 String msg = ioe.getMessage();

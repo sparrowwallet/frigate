@@ -20,7 +20,8 @@ connect = true
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
 
 [server]
-# port = 57001
+# host = "localhost"             # advertised in server.features (set to public hostname for public-facing deployments)
+# tcpPort = 57001
 # backendElectrumServer = "tcp://localhost:50001"
 
 # [database]

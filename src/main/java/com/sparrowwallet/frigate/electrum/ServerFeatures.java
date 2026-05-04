@@ -21,4 +21,8 @@ public record ServerFeatures(Map<String, HostInfo> hosts, String genesis_hash, S
     public ServerFeatures withSilentPayments(List<Integer> versions) {
         return new ServerFeatures(hosts, genesis_hash, hash_function, server_version, protocol_max, protocol_min, pruning, versions);
     }
+
+    public ServerFeatures withHosts(Map<String, HostInfo> hosts) {
+        return new ServerFeatures(hosts, genesis_hash, hash_function, server_version, protocol_max, protocol_min, pruning, silent_payments);
+    }
 }

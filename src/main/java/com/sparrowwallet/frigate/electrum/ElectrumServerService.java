@@ -104,7 +104,9 @@ public class ElectrumServerService {
     public ServerFeatures getServerFeatures() {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
-            return electrumBackendService.getServerFeatures().withSilentPayments(SILENT_PAYMENTS_SUPPORTED_VERSIONS);
+            Config.ServerConfig serverConfig = Config.get().getServer();
+            Map<String, ServerFeatures.HostInfo> ourHosts = Map.of(serverConfig.getHost(), new ServerFeatures.HostInfo(serverConfig.getTcpPort(), null));
+            return electrumBackendService.getServerFeatures().withHosts(ourHosts).withSilentPayments(SILENT_PAYMENTS_SUPPORTED_VERSIONS);
         }
 
         throw new UnsupportedOperationException("Configure backendElectrumServer to use server.features");
