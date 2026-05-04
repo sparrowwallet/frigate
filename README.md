@@ -210,14 +210,14 @@ This will avoid transmission issues with large wallets that have many transactio
 Servers should also emit a notification with empty `history` at regular intervals (e.g. every 5 seconds) during a historical scan, to keep the client updated on scanning progress.
 In the case of block reorgs, the server should rescan all existing subscriptions from the reorg-ed block height and send any history (if found) to the client.
 All found mempool transactions should be sent on the initial subscription, but thereafter previously sent mempool transactions should not be resent.
-When a mempool transaction confirms, the server sends a new notification containing the same `tx_hash` with non-zero `height`.
-Clients should treat the confirmed entry as canonical.
+The server **must not** re-notify a previously sent mempool transaction once it confirms as clients track confirmation state via `blockchain.scripthash.subscribe`.
+The silent payments subscription is purely a discovery channel.
 
 Clients reconnecting with prior history should pass `start = lastSeenHeight - reorgLimit` to limit the rescan to a recent window.
 A reorg limit of 100 blocks is sufficient.
 
-Clients should retrieve the transactions listed in the history with `blockchain.transaction.get` and subscribe to all owned outputs with `blockchain.scripthash.subscribe`. 
-Electrum wallet functionality then proceeds as normal.
+For every transaction announced via this subscription, clients **must** retrieve it with `blockchain.transaction.get` and subscribe to all owned outputs with `blockchain.scripthash.subscribe`.
+The scripthash subscription is the canonical source of confirmation height, reorg recovery, and spend tracking; the silent payments subscription does not duplicate any of these.
 In other words, the silent payments address subscription is a replacement for the monotonically increasing derivation path index in BIP32 wallets.
 The subscription seeks only to add to the client's knowledge of incoming silent payments transactions.
 The client is responsible for checking the transactions do actually send to addresses it has keys for, and using normal Electrum wallet synchronization techniques to monitor for changes to these addresses.

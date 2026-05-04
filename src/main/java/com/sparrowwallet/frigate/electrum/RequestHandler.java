@@ -23,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -235,10 +236,13 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).filter(h -> h > 0).max().ifPresent(subscription::accumulateMaxBlockHeight);
             subscription.getMempoolTxids().addAll(notification.history().stream().filter(txEntry -> txEntry.height <= 0).map(txEntry -> Sha256Hash.wrap(txEntry.tx_hash)).collect(Collectors.toSet()));
 
+            List<SilentPaymentsTxEntry> deliverable = notification.history().stream()
+                    .filter(txEntry -> txEntry.height <= 0 || !subscription.getMempoolTxids().contains(Sha256Hash.wrap(txEntry.tx_hash))).toList();
+
             try {
                 ElectrumNotificationTransport electrumNotificationTransport = new ElectrumNotificationTransport(clientSocket);
                 JsonRpcClient jsonRpcClient = new JsonRpcClient(electrumNotificationTransport);
-                jsonRpcClient.onDemand(ElectrumNotificationService.class).notifySilentPayments(notification.subscription(), notification.progress(), notification.history());
+                jsonRpcClient.onDemand(ElectrumNotificationService.class).notifySilentPayments(notification.subscription(), notification.progress(), deliverable);
             } catch(IllegalStateException e) {
                 if(e.getCause() instanceof java.io.IOException) {
                     log.debug("Client disconnected before notification could be sent");
@@ -264,13 +268,6 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             if(subscription.isActive()) {
                 electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, subscription, new WeakReference<>(this));
             }
-        }
-    }
-
-    @Subscribe
-    public void silentPaymentsMempoolIndexRemoved(SilentPaymentsMempoolIndexRemoved removed) {
-        for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
-            subscription.getMempoolTxids().removeAll(removed.getTxids());
         }
     }
 
