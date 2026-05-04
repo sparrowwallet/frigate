@@ -44,7 +44,7 @@ public class IndexQuerier {
     public void startHistoryScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, SilentPaymentAddressSubscription subscription, WeakReference<SubscriptionStatus> subscriptionStatusRef, boolean isHistorical) {
         BooleanSupplier cancelled = subscription.captureScanCancellation();
         queryPool.submit(() -> {
-            SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), startHeight == null ? 0 : startHeight);
+            SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
             List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, notificationSubscription, startHeight, endHeight, subscriptionStatusRef, cancelled);
             List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
             history.addAll(mempoolHistory);
@@ -66,7 +66,7 @@ public class IndexQuerier {
     public void startMempoolScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, SilentPaymentAddressSubscription subscription, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
         BooleanSupplier cancelled = subscription.captureScanCancellation();
         queryPool.submit(() -> {
-            SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), startHeight == null ? 0 : startHeight);
+            SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
             List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
 
             if(!cancelled.getAsBoolean() && !mempoolHistory.isEmpty()) {

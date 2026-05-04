@@ -148,6 +148,8 @@ On every subscribe (including re-subscribe to the same address), the server **mu
 
 Once subscribed, the client will receive notifications as results are returned from the scan with the following signature. 
 Servers **must** send the response to `blockchain.silentpayments.subscribe` before any notification for that subscription.
+The `subscription` object in every notification **must** be byte-identical to the one returned in the original `blockchain.silentpayments.subscribe` response with the same `address`, `labels` and `start_height`.
+It identifies which subscription the notification belongs to, not the range that the server happened to scan to produce it.
 All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results.
 A `progress` of `1.0` indicates the scan is up to date as of this notification.
 The first such notification marks the end of the historical scan; subsequent `1.0` notifications represent live updates as new blocks and mempool transactions are scanned.
