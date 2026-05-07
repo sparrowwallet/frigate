@@ -204,7 +204,7 @@ public class ElectrumServerService {
     public ElectrumBlockHeader subscribeHeaders() {
         checkVersionNegotiated();
         requestHandler.setHeadersSubscribed(true);
-        return bitcoindClient != null ? bitcoindClient.getTip() : new ElectrumBlockHeader(0, "");
+        return bitcoindClient != null ? bitcoindClient.getTip() : new ElectrumBlockHeader(0, null);
     }
 
     @JsonRpcMethod("server.ping")

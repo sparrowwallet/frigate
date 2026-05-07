@@ -269,62 +269,59 @@ public class Index {
         }
     }
 
-    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef, BooleanSupplier cancelled) {
+    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef, BooleanSupplier cancelled, boolean isHistorical) {
         ConcurrentLinkedQueue<SilentPaymentsTxEntry> queue = new ConcurrentLinkedQueue<>();
         byte[] scanKeyBytes = Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes());
 
         try {
             dbManager.executeRead(connection -> {
-                String sql = getSql(subscription, startHeight, endHeight);
+                String sql = getSql(subscription, startHeight, endHeight, isHistorical);
 
                 try(DuckDBPreparedStatement statement = connection.prepareStatement(sql).unwrap(DuckDBPreparedStatement.class)) {
                     if(isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
                         return false;
                     }
 
-                    bindParameters(statement, scanAddress, subscription, startHeight, endHeight);
+                    Long totalRows = isHistorical ? getInputRowCount(connection, startHeight, endHeight) : null;
+                    bindParameters(statement, scanAddress, subscription, startHeight, endHeight, totalRows);
 
-                    try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, r -> {
-                        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQueryProgress-%d").build();
-                        Thread t = namedThreadFactory.newThread(r);
-                        t.setDaemon(true);
-                        return t;
-                    })) {
-                        queryProgressExecutor.scheduleAtFixedRate(() -> {
-                            try {
-                                if(dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
-                                    statement.cancel();
-                                    queryProgressExecutor.shutdownNow();
-                                    return;
-                                }
-
-                                double progress = pollScanProgress(scanKeyBytes);
-
-                                List<SilentPaymentsTxEntry> history = new ArrayList<>();
-                                SilentPaymentsTxEntry entry;
-                                while((entry = queue.poll()) != null) {
-                                    history.add(entry);
-                                    if(history.size() >= HISTORY_PAGE_SIZE) {
-                                        Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
-                                        history.clear();
+                    if(isHistorical) {
+                        try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, r -> {
+                            ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQueryProgress-%d").build();
+                            Thread t = namedThreadFactory.newThread(r);
+                            t.setDaemon(true);
+                            return t;
+                        })) {
+                            queryProgressExecutor.scheduleAtFixedRate(() -> {
+                                try {
+                                    if(dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
+                                        statement.cancel();
+                                        queryProgressExecutor.shutdownNow();
+                                        return;
                                     }
-                                }
-                                if(!history.isEmpty() || queryProgressExecutor.getTaskCount() % 5 == 0) {
+
+                                    double progress = pollScanProgress(scanKeyBytes);
+
+                                    List<SilentPaymentsTxEntry> history = new ArrayList<>();
+                                    SilentPaymentsTxEntry entry;
+                                    while((entry = queue.poll()) != null) {
+                                        history.add(entry);
+                                        if(history.size() >= HISTORY_PAGE_SIZE) {
+                                            Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
+                                            history.clear();
+                                        }
+                                    }
                                     Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
                                     history.clear();
+                                } catch(Exception e) {
+                                    log.error("Error getting query progress", e);
                                 }
-                            } catch(Exception e) {
-                                log.error("Error getting query progress", e);
-                            }
-                        }, 1, 1, TimeUnit.SECONDS);
+                            }, 5, 5, TimeUnit.SECONDS);
 
-                        ResultSet resultSet = statement.executeQuery();
-                        while(resultSet.next()) {
-                            byte[] txid = resultSet.getBytes(1);
-                            byte[] tweak_key = compressRawKey(resultSet.getBytes(2));
-                            int height = resultSet.getInt(3);
-                            queue.offer(new SilentPaymentsTxEntry(height, Utils.bytesToHex(txid), Utils.bytesToHex(tweak_key)));
+                            drainResultSet(statement.executeQuery(), queue);
                         }
+                    } else {
+                        drainResultSet(statement.executeQuery(), queue);
                     }
                 }
 
@@ -355,31 +352,29 @@ public class Index {
         return history;
     }
 
-    private String getSql(SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight) {
+    private void drainResultSet(ResultSet resultSet, ConcurrentLinkedQueue<SilentPaymentsTxEntry> queue) throws SQLException {
+        while(resultSet.next()) {
+            byte[] txid = resultSet.getBytes(1);
+            byte[] tweak_key = compressRawKey(resultSet.getBytes(2));
+            int height = resultSet.getInt(3);
+            queue.offer(new SilentPaymentsTxEntry(height, Utils.bytesToHex(txid), Utils.bytesToHex(tweak_key)));
+        }
+    }
+
+    private String getSql(SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, boolean withTotalRows) {
         String labelsStr = "[" + String.join(", ", Collections.nCopies(subscription.labels().length, "?")) + "]";
 
-        String sql = "SELECT txid, tweak_key, height FROM ufsecp_scan((SELECT txid, height, tweak_key, outputs FROM " + TWEAK_TABLE;
-
-        if(startHeight != null || endHeight != null) {
-            sql += " WHERE ";
-        }
-
-        if(startHeight != null) {
-            sql += "height >= ?";
-            if(endHeight != null) {
-                sql += " AND ";
-            }
-        }
-
-        if(endHeight != null) {
-            sql += "height <= ?";
-        }
-
-        sql += "), ?, ?, " + labelsStr + ", batch_size := ?";
+        String sql = "SELECT txid, tweak_key, height FROM ufsecp_scan((SELECT txid, height, tweak_key, outputs FROM " + TWEAK_TABLE
+                + tweakHeightFilter(startHeight, endHeight)
+                + "), ?, ?, " + labelsStr + ", batch_size := ?";
 
         ComputeBackend computeBackend = Config.get().getScan().getComputeBackendEnum();
         if(computeBackend != ComputeBackend.AUTO) {
             sql += ", backend := ?";
+        }
+
+        if(withTotalRows) {
+            sql += ", total_rows := ?";
         }
 
         sql += ") ORDER BY height";
@@ -387,14 +382,8 @@ public class Index {
         return sql;
     }
 
-    private void bindParameters(DuckDBPreparedStatement statement, SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight) throws SQLException {
-        int index = 1;
-        if(startHeight != null) {
-            statement.setInt(index++, startHeight);
-        }
-        if(endHeight != null) {
-            statement.setInt(index++, endHeight);
-        }
+    private void bindParameters(DuckDBPreparedStatement statement, SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Long totalRows) throws SQLException {
+        int index = bindTweakHeightFilter(statement, 1, startHeight, endHeight);
         statement.setBytes(index++, Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes()));
         statement.setBytes(index++, SilentPaymentUtils.getSecp256k1PubKey(scanAddress.getSpendKey()));
         for(Integer label : subscription.labels()) {
@@ -404,7 +393,48 @@ public class Index {
 
         ComputeBackend computeBackend = Config.get().getScan().getComputeBackendEnum();
         if(computeBackend != ComputeBackend.AUTO) {
-            statement.setString(index, computeBackend.toSqlValue());
+            statement.setString(index++, computeBackend.toSqlValue());
+        }
+
+        if(totalRows != null) {
+            statement.setLong(index, totalRows);
+        }
+    }
+
+    private static String tweakHeightFilter(Integer startHeight, Integer endHeight) {
+        if(startHeight == null && endHeight == null) {
+            return "";
+        }
+        StringBuilder sql = new StringBuilder(" WHERE ");
+        if(startHeight != null) {
+            sql.append("height >= ?");
+            if(endHeight != null) {
+                sql.append(" AND ");
+            }
+        }
+        if(endHeight != null) {
+            sql.append("height <= ?");
+        }
+        return sql.toString();
+    }
+
+    private static int bindTweakHeightFilter(PreparedStatement statement, int startIndex, Integer startHeight, Integer endHeight) throws SQLException {
+        int idx = startIndex;
+        if(startHeight != null) {
+            statement.setInt(idx++, startHeight);
+        }
+        if(endHeight != null) {
+            statement.setInt(idx++, endHeight);
+        }
+        return idx;
+    }
+
+    private long getInputRowCount(Connection connection, Integer startHeight, Integer endHeight) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM " + TWEAK_TABLE + tweakHeightFilter(startHeight, endHeight);
+        try(PreparedStatement countStmt = connection.prepareStatement(sql)) {
+            bindTweakHeightFilter(countStmt, 1, startHeight, endHeight);
+            ResultSet rs = countStmt.executeQuery();
+            return rs.next() ? rs.getLong(1) : 0L;
         }
     }
 

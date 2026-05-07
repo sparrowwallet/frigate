@@ -44,21 +44,21 @@ public class IndexQuerier {
     public void startHistoryScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, SilentPaymentAddressSubscription subscription, WeakReference<SubscriptionStatus> subscriptionStatusRef, boolean isHistorical) {
         BooleanSupplier cancelled = subscription.captureScanCancellation();
         queryPool.submit(() -> {
-            SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
-            List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, notificationSubscription, startHeight, endHeight, subscriptionStatusRef, cancelled);
-            List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
-            history.addAll(mempoolHistory);
+            try {
+                SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
+                List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, notificationSubscription, startHeight, endHeight, subscriptionStatusRef, cancelled, isHistorical);
+                List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
+                history.addAll(mempoolHistory);
 
-            boolean wasCancelled = cancelled.getAsBoolean();
-            if(!wasCancelled && (isHistorical || !history.isEmpty())) {
-                Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(history), subscriptionStatusRef.get()));
-            }
-            if(!wasCancelled && isHistorical) {
-                try {
-                    subscription.markHistoricalComplete();
-                } catch(Exception e) {
-                    log.error("Error marking historical complete", e);
+                boolean wasCancelled = cancelled.getAsBoolean();
+                if(!wasCancelled && (isHistorical || !history.isEmpty())) {
+                    Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(history), subscriptionStatusRef.get()));
                 }
+                if(!wasCancelled && isHistorical) {
+                    subscription.markHistoricalComplete();
+                }
+            } catch(Throwable t) {
+                log.error("History scan task failed for " + scanAddress + " (start=" + startHeight + ", end=" + endHeight + ", isHistorical=" + isHistorical + ")", t);
             }
         });
     }
@@ -66,17 +66,21 @@ public class IndexQuerier {
     public void startMempoolScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, SilentPaymentAddressSubscription subscription, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
         BooleanSupplier cancelled = subscription.captureScanCancellation();
         queryPool.submit(() -> {
-            SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
-            List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
+            try {
+                SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
+                List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
 
-            if(!cancelled.getAsBoolean() && !mempoolHistory.isEmpty()) {
-                Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(mempoolHistory), subscriptionStatusRef.get()));
+                if(!cancelled.getAsBoolean() && !mempoolHistory.isEmpty()) {
+                    Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(mempoolHistory), subscriptionStatusRef.get()));
+                }
+            } catch(Throwable t) {
+                log.error("Mempool scan task failed for " + scanAddress, t);
             }
         });
     }
 
     private List<SilentPaymentsTxEntry> getMempoolHistory(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef, SilentPaymentsSubscription notificationSubscription, BooleanSupplier cancelled) {
-        List<SilentPaymentsTxEntry> mempoolHistory = mempoolIndex.getHistoryAsync(scanAddress, notificationSubscription, null, null, subscriptionStatusRef, cancelled);
+        List<SilentPaymentsTxEntry> mempoolHistory = mempoolIndex.getHistoryAsync(scanAddress, notificationSubscription, null, null, subscriptionStatusRef, cancelled, false);
         SubscriptionStatus subscriptionStatus = subscriptionStatusRef.get();
         if(subscriptionStatus != null && subscriptionStatus.getSilentPaymentsMempoolTxids(scanAddress.toString()) != null) {
             mempoolHistory.removeIf(txEntry -> subscriptionStatus.getSilentPaymentsMempoolTxids(scanAddress.toString()).contains(Sha256Hash.wrap(txEntry.tx_hash)));
