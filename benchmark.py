@@ -3,6 +3,7 @@
 import argparse
 import concurrent.futures
 import socket
+import ssl
 import json
 import sys
 import time
@@ -41,10 +42,15 @@ TRANSACTION_COUNTS = {
 }
 
 
-def scan(host, port, start_range):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def scan(host, port, start_range, tls=False):
+    raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    raw.settimeout(600)
+    if tls:
+        ctx = ssl.create_default_context()
+        sock = ctx.wrap_socket(raw, server_hostname=host)
+    else:
+        sock = raw
     sock.connect((host, port))
-    sock.settimeout(600)
 
     sock.sendall(json.dumps({
         "jsonrpc": "2.0", "method": "server.version",
@@ -102,7 +108,7 @@ def format_number(n):
     return f"{n:,}"
 
 
-def run_benchmarks(host, port, end_height, markdown, clients, max_periods=0):
+def run_benchmarks(host, port, end_height, markdown, clients, max_periods=0, tls=False):
     period_list = PERIODS[:max_periods] if max_periods > 0 else PERIODS
     periods = []
     for desc, short, blocks in period_list:
@@ -113,7 +119,7 @@ def run_benchmarks(host, port, end_height, markdown, clients, max_periods=0):
     # Warmup scan (first scan on a new connection has overhead from
     # precompute table loading in the DuckDB read pool)
     print("Warming up...", end="", flush=True)
-    scan(host, port, periods[0][4])
+    scan(host, port, periods[0][4], tls=tls)
     print(" done.\n")
 
     results = []
@@ -121,10 +127,10 @@ def run_benchmarks(host, port, end_height, markdown, clients, max_periods=0):
         sys.stdout.write(f"  Scanning {short}...")
         sys.stdout.flush()
         if clients == 1:
-            elapsed, count = scan(host, port, height_range)
+            elapsed, count = scan(host, port, height_range, tls=tls)
         else:
             with concurrent.futures.ThreadPoolExecutor(max_workers=clients) as pool:
-                futures = [pool.submit(scan, host, port, height_range) for _ in range(clients)]
+                futures = [pool.submit(scan, host, port, height_range, tls) for _ in range(clients)]
                 thread_results = [f.result() for f in futures]
             elapsed = max(e for e, c in thread_results)
         tps = round(clients * txns / elapsed) if txns and elapsed > 0 else None
@@ -180,7 +186,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Benchmark Frigate Silent Payments scanning performance.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Examples:\n  python3 benchmark.py\n  python3 benchmark.py --end-height 920000 --markdown\n  python3 benchmark.py --host 192.168.1.10 --port 57001\n  python3 benchmark.py --clients 4",
+        epilog="Examples:\n  python3 benchmark.py\n  python3 benchmark.py --end-height 920000 --markdown\n  python3 benchmark.py --host 192.168.1.10 --port 57001\n  python3 benchmark.py --clients 4\n  python3 benchmark.py --tls --host frigate.example.com --port 50002",
     )
     parser.add_argument("--host", default=DEFAULT_HOST, help=f"server host (default: {DEFAULT_HOST})")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"server port (default: {DEFAULT_PORT})")
@@ -188,10 +194,11 @@ def main():
     parser.add_argument("--markdown", action="store_true", help="output as markdown table")
     parser.add_argument("--clients", type=int, default=1, help="number of concurrent clients per scan period (default: 1)")
     parser.add_argument("--periods", type=int, default=0, help="number of periods to run (default: all)")
+    parser.add_argument("--tls", action="store_true", help="connect over TLS")
     args = parser.parse_args()
 
     try:
-        run_benchmarks(args.host, args.port, args.end_height, args.markdown, args.clients, args.periods)
+        run_benchmarks(args.host, args.port, args.end_height, args.markdown, args.clients, args.periods, args.tls)
     except ConnectionRefusedError:
         print(f"Error: could not connect to {args.host}:{args.port}", file=sys.stderr)
         sys.exit(1)
