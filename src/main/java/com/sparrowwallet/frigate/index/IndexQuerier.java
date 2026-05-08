@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -46,8 +47,8 @@ public class IndexQuerier {
         queryPool.submit(() -> {
             try {
                 SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
-                List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, notificationSubscription, startHeight, endHeight, subscriptionStatusRef, cancelled, isHistorical);
-                List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
+                List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, notificationSubscription, startHeight, endHeight, null, subscriptionStatusRef, cancelled, isHistorical);
+                List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, null, subscriptionStatusRef, notificationSubscription, cancelled);
                 history.addAll(mempoolHistory);
 
                 boolean wasCancelled = cancelled.getAsBoolean();
@@ -63,12 +64,12 @@ public class IndexQuerier {
         });
     }
 
-    public void startMempoolScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, SilentPaymentAddressSubscription subscription, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
+    public void startMempoolScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, SilentPaymentAddressSubscription subscription, WeakReference<SubscriptionStatus> subscriptionStatusRef) {
         BooleanSupplier cancelled = subscription.captureScanCancellation();
         queryPool.submit(() -> {
             try {
                 SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
-                List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, subscriptionStatusRef, notificationSubscription, cancelled);
+                List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, mempoolTxids, subscriptionStatusRef, notificationSubscription, cancelled);
 
                 if(!cancelled.getAsBoolean() && !mempoolHistory.isEmpty()) {
                     Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(mempoolHistory), subscriptionStatusRef.get()));
@@ -79,8 +80,8 @@ public class IndexQuerier {
         });
     }
 
-    private List<SilentPaymentsTxEntry> getMempoolHistory(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef, SilentPaymentsSubscription notificationSubscription, BooleanSupplier cancelled) {
-        List<SilentPaymentsTxEntry> mempoolHistory = mempoolIndex.getHistoryAsync(scanAddress, notificationSubscription, null, null, subscriptionStatusRef, cancelled, false);
+    private List<SilentPaymentsTxEntry> getMempoolHistory(SilentPaymentScanAddress scanAddress, Set<Sha256Hash> mempoolTxids, WeakReference<SubscriptionStatus> subscriptionStatusRef, SilentPaymentsSubscription notificationSubscription, BooleanSupplier cancelled) {
+        List<SilentPaymentsTxEntry> mempoolHistory = mempoolIndex.getHistoryAsync(scanAddress, notificationSubscription, null, null, mempoolTxids, subscriptionStatusRef, cancelled, false);
         SubscriptionStatus subscriptionStatus = subscriptionStatusRef.get();
         if(subscriptionStatus != null && subscriptionStatus.getSilentPaymentsMempoolTxids(scanAddress.toString()) != null) {
             mempoolHistory.removeIf(txEntry -> subscriptionStatus.getSilentPaymentsMempoolTxids(scanAddress.toString()).contains(Sha256Hash.wrap(txEntry.tx_hash)));

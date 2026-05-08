@@ -266,7 +266,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     public void silentPaymentsMempoolIndexAdded(SilentPaymentsMempoolIndexAdded added) {
         for(SilentPaymentAddressSubscription subscription : silentPaymentsAddressesSubscribed.values()) {
             if(subscription.isActive()) {
-                electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, subscription, new WeakReference<>(this));
+                electrumServerService.getIndexQuerier().startMempoolScan(subscription.getAddress(), null, null, added.getTxids(), subscription, new WeakReference<>(this));
             }
         }
     }

@@ -269,13 +269,17 @@ public class Index {
         }
     }
 
-    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, WeakReference<SubscriptionStatus> subscriptionStatusRef, BooleanSupplier cancelled, boolean isHistorical) {
+    public List<SilentPaymentsTxEntry> getHistoryAsync(SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, WeakReference<SubscriptionStatus> subscriptionStatusRef, BooleanSupplier cancelled, boolean isHistorical) {
+        if(mempoolTxids != null && mempoolTxids.isEmpty()) {
+            return Collections.emptyList();
+        }
+
         ConcurrentLinkedQueue<SilentPaymentsTxEntry> queue = new ConcurrentLinkedQueue<>();
         byte[] scanKeyBytes = Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes());
 
         try {
             dbManager.executeRead(connection -> {
-                String sql = getSql(subscription, startHeight, endHeight, isHistorical);
+                String sql = getSql(subscription, startHeight, endHeight, mempoolTxids, isHistorical);
 
                 try(DuckDBPreparedStatement statement = connection.prepareStatement(sql).unwrap(DuckDBPreparedStatement.class)) {
                     if(isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
@@ -283,7 +287,7 @@ public class Index {
                     }
 
                     Long totalRows = isHistorical ? getInputRowCount(connection, startHeight, endHeight) : null;
-                    bindParameters(statement, scanAddress, subscription, startHeight, endHeight, totalRows);
+                    bindParameters(statement, scanAddress, subscription, startHeight, endHeight, mempoolTxids, totalRows);
 
                     if(isHistorical) {
                         try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, r -> {
@@ -361,11 +365,11 @@ public class Index {
         }
     }
 
-    private String getSql(SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, boolean withTotalRows) {
+    private String getSql(SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, boolean withTotalRows) {
         String labelsStr = "[" + String.join(", ", Collections.nCopies(subscription.labels().length, "?")) + "]";
 
         String sql = "SELECT txid, tweak_key, height FROM ufsecp_scan((SELECT txid, height, tweak_key, outputs FROM " + TWEAK_TABLE
-                + tweakHeightFilter(startHeight, endHeight)
+                + buildWhereClause(startHeight, endHeight, mempoolTxids)
                 + "), ?, ?, " + labelsStr + ", batch_size := ?";
 
         ComputeBackend computeBackend = Config.get().getScan().getComputeBackendEnum();
@@ -382,8 +386,9 @@ public class Index {
         return sql;
     }
 
-    private void bindParameters(DuckDBPreparedStatement statement, SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Long totalRows) throws SQLException {
+    private void bindParameters(DuckDBPreparedStatement statement, SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, Long totalRows) throws SQLException {
         int index = bindTweakHeightFilter(statement, 1, startHeight, endHeight);
+        index = bindTweakTxidsFilter(statement, index, mempoolTxids);
         statement.setBytes(index++, Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes()));
         statement.setBytes(index++, SilentPaymentUtils.getSecp256k1PubKey(scanAddress.getSpendKey()));
         for(Integer label : subscription.labels()) {
@@ -401,11 +406,26 @@ public class Index {
         }
     }
 
+    private static String buildWhereClause(Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids) {
+        String heightClause = tweakHeightFilter(startHeight, endHeight);
+        String txidsClause = tweakTxidsFilter(mempoolTxids);
+        if(heightClause.isEmpty() && txidsClause.isEmpty()) {
+            return "";
+        }
+        if(heightClause.isEmpty()) {
+            return " WHERE " + txidsClause;
+        }
+        if(txidsClause.isEmpty()) {
+            return " WHERE " + heightClause;
+        }
+        return " WHERE " + heightClause + " AND " + txidsClause;
+    }
+
     private static String tweakHeightFilter(Integer startHeight, Integer endHeight) {
         if(startHeight == null && endHeight == null) {
             return "";
         }
-        StringBuilder sql = new StringBuilder(" WHERE ");
+        StringBuilder sql = new StringBuilder();
         if(startHeight != null) {
             sql.append("height >= ?");
             if(endHeight != null) {
@@ -416,6 +436,13 @@ public class Index {
             sql.append("height <= ?");
         }
         return sql.toString();
+    }
+
+    private static String tweakTxidsFilter(Set<Sha256Hash> mempoolTxids) {
+        if(mempoolTxids == null) {
+            return "";
+        }
+        return "txid IN (SELECT unnest(?))";
     }
 
     private static int bindTweakHeightFilter(PreparedStatement statement, int startIndex, Integer startHeight, Integer endHeight) throws SQLException {
@@ -429,8 +456,18 @@ public class Index {
         return idx;
     }
 
+    private static int bindTweakTxidsFilter(PreparedStatement statement, int startIndex, Set<Sha256Hash> mempoolTxids) throws SQLException {
+        if(mempoolTxids == null) {
+            return startIndex;
+        }
+        Object[] arr = mempoolTxids.stream().map(Sha256Hash::getBytes).toArray();
+        Array array = statement.getConnection().createArrayOf("BLOB", arr);
+        statement.setArray(startIndex, array);
+        return startIndex + 1;
+    }
+
     private long getInputRowCount(Connection connection, Integer startHeight, Integer endHeight) throws SQLException {
-        String sql = "SELECT COUNT(*) FROM " + TWEAK_TABLE + tweakHeightFilter(startHeight, endHeight);
+        String sql = "SELECT COUNT(*) FROM " + TWEAK_TABLE + buildWhereClause(startHeight, endHeight, null);
         try(PreparedStatement countStmt = connection.prepareStatement(sql)) {
             bindTweakHeightFilter(countStmt, 1, startHeight, endHeight);
             ResultSet rs = countStmt.executeQuery();
