@@ -343,6 +343,7 @@ public class Config {
         private Integer batchSize;
         private String computeBackend;
         private Integer dbThreads;
+        private String memoryLimit;
         private Integer maxLabels;
         private Integer maxSubscriptions;
 
@@ -396,6 +397,14 @@ public class Config {
 
         public void setDbThreads(Integer dbThreads) {
             this.dbThreads = dbThreads;
+        }
+
+        public String getMemoryLimit() {
+            return memoryLimit;
+        }
+
+        public void setMemoryLimit(String memoryLimit) {
+            this.memoryLimit = memoryLimit;
         }
     }
 

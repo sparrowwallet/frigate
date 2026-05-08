@@ -402,6 +402,7 @@ connect = true
 # batchSize = 300000             # rows per GPU dispatch (reduce if scanning hangs on older GPUs)
 # computeBackend = "AUTO"        # AUTO, GPU, or CPU
 # dbThreads = 4                  # limit DuckDB threads (reduces CPU load when computeBackend = "CPU")
+# memoryLimit = "8GB"            # cap DuckDB memory usage (default: 80% of system RAM)
 # maxLabels = 10                 # maximum number of labels accepted per silent payments subscription
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
 
@@ -435,6 +436,7 @@ The `computeBackend` setting controls whether historical scanning uses GPU or CP
 In `AUTO` mode, the GPU is used if one is detected, otherwise the CPU is used.
 Set to `CPU` to force CPU-only scanning.
 With CPU-only scanning, `dbThreads` can be used to limit the number of DuckDB threads and reduce CPU load.
+The `memoryLimit` setting caps DuckDB's memory usage (e.g. `"8GB"`, `"1024MB"`). DuckDB's default is 80% of system RAM.
 Mempool and incremental block scans always run on the CPU backend, since they are short, latency-sensitive and benefit from being decoupled from the longer-running historical scans.
 
 The `batchSize` setting controls how many transactions are processed per GPU dispatch (default: 300,000).

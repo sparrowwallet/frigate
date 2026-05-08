@@ -66,6 +66,9 @@ public class MemoryDbManager implements DbManager {
         if(Config.get().getScan().getDbThreads() != null) {
             duckDbProperties.setProperty("threads", Config.get().getScan().getDbThreads().toString());
         }
+        if(Config.get().getScan().getMemoryLimit() != null) {
+            duckDbProperties.setProperty("memory_limit", Config.get().getScan().getMemoryLimit());
+        }
 
         connection = DriverManager.getConnection(DbManager.DB_PREFIX + "memory:", duckDbProperties);
 

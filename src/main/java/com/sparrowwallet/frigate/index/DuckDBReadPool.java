@@ -32,6 +32,9 @@ public class DuckDBReadPool {
             if(Config.get().getScan().getDbThreads() != null) {
                 stmt.execute("SET threads = '" + Config.get().getScan().getDbThreads() + "'");
             }
+            if(Config.get().getScan().getMemoryLimit() != null) {
+                stmt.execute("SET memory_limit = '" + Config.get().getScan().getMemoryLimit() + "'");
+            }
 
             File ufsecpExtensionFile = Storage.getUfsecpExtensionFile();
             stmt.execute("LOAD '" + ufsecpExtensionFile.getAbsolutePath() + "'");
