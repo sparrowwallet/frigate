@@ -287,7 +287,7 @@ public class Index {
                     }
 
                     Long totalRows = isHistorical ? getInputRowCount(connection, startHeight, endHeight) : null;
-                    bindParameters(statement, scanAddress, subscription, startHeight, endHeight, mempoolTxids, totalRows);
+                    bindParameters(statement, scanAddress, subscription, startHeight, endHeight, mempoolTxids, isHistorical, totalRows);
 
                     if(isHistorical) {
                         try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, r -> {
@@ -365,19 +365,19 @@ public class Index {
         }
     }
 
-    private String getSql(SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, boolean withTotalRows) {
+    private String getSql(SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, boolean isHistorical) {
         String labelsStr = "[" + String.join(", ", Collections.nCopies(subscription.labels().length, "?")) + "]";
 
         String sql = "SELECT txid, tweak_key, height FROM ufsecp_scan((SELECT txid, height, tweak_key, outputs FROM " + TWEAK_TABLE
                 + buildWhereClause(startHeight, endHeight, mempoolTxids)
                 + "), ?, ?, " + labelsStr + ", batch_size := ?";
 
-        ComputeBackend computeBackend = Config.get().getScan().getComputeBackendEnum();
-        if(computeBackend != ComputeBackend.AUTO) {
+        ComputeBackend backend = resolveBackend(isHistorical);
+        if(backend != ComputeBackend.AUTO) {
             sql += ", backend := ?";
         }
 
-        if(withTotalRows) {
+        if(isHistorical) {
             sql += ", total_rows := ?";
         }
 
@@ -386,7 +386,7 @@ public class Index {
         return sql;
     }
 
-    private void bindParameters(DuckDBPreparedStatement statement, SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, Long totalRows) throws SQLException {
+    private void bindParameters(DuckDBPreparedStatement statement, SilentPaymentScanAddress scanAddress, SilentPaymentsSubscription subscription, Integer startHeight, Integer endHeight, Set<Sha256Hash> mempoolTxids, boolean isHistorical, Long totalRows) throws SQLException {
         int index = bindTweakHeightFilter(statement, 1, startHeight, endHeight);
         index = bindTweakTxidsFilter(statement, index, mempoolTxids);
         statement.setBytes(index++, Utils.reverseBytes(scanAddress.getScanKey().getPrivKeyBytes()));
@@ -396,9 +396,9 @@ public class Index {
         }
         statement.setInt(index++, batchSize);
 
-        ComputeBackend computeBackend = Config.get().getScan().getComputeBackendEnum();
-        if(computeBackend != ComputeBackend.AUTO) {
-            statement.setString(index++, computeBackend.toSqlValue());
+        ComputeBackend backend = resolveBackend(isHistorical);
+        if(backend != ComputeBackend.AUTO) {
+            statement.setString(index++, backend.toSqlValue());
         }
 
         if(totalRows != null) {
@@ -473,6 +473,14 @@ public class Index {
             ResultSet rs = countStmt.executeQuery();
             return rs.next() ? rs.getLong(1) : 0L;
         }
+    }
+
+    private static ComputeBackend resolveBackend(boolean isHistorical) {
+        if(!isHistorical) {
+            return ComputeBackend.CPU;
+        }
+
+        return Config.get().getScan().getComputeBackendEnum();
     }
 
     private static boolean isUnsubscribed(SilentPaymentScanAddress scanAddress, WeakReference<SubscriptionStatus> subscriptionStatusRef) {

@@ -431,10 +431,11 @@ DuckDB databases can be transferred between different operating systems, and sho
 
 ### Scan
 
-The `computeBackend` setting controls whether scanning uses GPU or CPU. Valid values are `AUTO` (default), `GPU`, and `CPU`.
+The `computeBackend` setting controls whether historical scanning uses GPU or CPU. Valid values are `AUTO` (default), `GPU`, and `CPU`.
 In `AUTO` mode, the GPU is used if one is detected, otherwise the CPU is used.
 Set to `CPU` to force CPU-only scanning.
 With CPU-only scanning, `dbThreads` can be used to limit the number of DuckDB threads and reduce CPU load.
+Mempool and incremental block scans always run on the CPU backend, since they are short, latency-sensitive and benefit from being decoupled from the longer-running historical scans.
 
 The `batchSize` setting controls how many transactions are processed per GPU dispatch (default: 300,000).
 If scanning hangs or becomes unstable on certain GPUs (particularly older OpenCL-only GPUs), try reducing this value (e.g. 10,000 to 50,000).
