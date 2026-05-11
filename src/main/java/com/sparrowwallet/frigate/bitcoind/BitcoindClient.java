@@ -153,6 +153,8 @@ public class BitcoindClient {
         String zmqEndpoint = Config.get().getCore().getZmqSequenceEndpoint();
         if(zmqEndpoint != null && !zmqEndpoint.isBlank()) {
             startZmqSequenceSubscriber(zmqEndpoint);
+        } else {
+            log.warn("Polling bitcoind every {}s, consider configuring zmqSequenceEndpoint for more responsive updates", POLL_MEMPOOL_DIFF_INTERVAL_MS / 1000);
         }
     }
 
@@ -315,7 +317,7 @@ public class BitcoindClient {
         timer.schedule(new TimerTask() {
             @Override
             public void run() {
-                if(!stopped && lastZmqMessageMs == 0L) {
+                if(!stopped && lastZmqMessageMs == 0L && Network.get() == Network.MAINNET) {
                     log.warn("No ZMQ messages received from Bitcoin Core within 60s at {} - verify -zmqpubsequence is configured on this endpoint. " +
                             "Mempool ingestion latency will be up to {}s until ZMQ messages arrive", endpoint, ZMQ_MEMPOOL_DIFF_INTERVAL_MS / 1000);
                 }
