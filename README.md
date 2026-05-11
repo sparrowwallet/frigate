@@ -393,7 +393,7 @@ connect = true
 # authType = "COOKIE"            # COOKIE or USERPASS
 # dataDir = "/home/bitcoin/.bitcoin"
 # auth = "user:password"         # only needed for USERPASS
-# zmqSequenceEndpoint = "tcp://127.0.0.1:28332"   # bitcoind -zmqpubsequence endpoint for low-latency mempool ingestion
+# zmqSequenceEndpoint = "tcp://127.0.0.1:28336"   # bitcoind -zmqpubsequence endpoint for low-latency mempool ingestion
 
 [index]
 # startHeight = 0                # default: 709632 on mainnet (Taproot activation), 0 on testnet

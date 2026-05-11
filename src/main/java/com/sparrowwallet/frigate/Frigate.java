@@ -42,6 +42,9 @@ public class Frigate {
     private static Object trayManager;
 
     public void start() {
+        getLogger().info("Starting " + SERVER_NAME + " on " + Network.get().getName());
+        getLogger().info("Using home directory " + Storage.getFrigateHome().getAbsolutePath());
+
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
 
         Config config = Config.get();
@@ -74,6 +77,8 @@ public class Frigate {
     }
 
     public void stop() {
+        getLogger().info(SERVER_NAME + " shutting down...");
+
         if(blocksIndex != null) {
             blocksIndex.close();
         }
