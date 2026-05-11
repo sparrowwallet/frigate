@@ -26,6 +26,7 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -64,6 +65,7 @@ public class BitcoindClient {
     private volatile Thread zmqConsumerThread;
     private volatile long lastZmqMessageMs;
     private final BlockingQueue<MempoolSeqEvent> zmqQueue = new LinkedBlockingQueue<>(50_000);
+    private final AtomicBoolean pollPending = new AtomicBoolean();
     private long lastMempoolDiffMs;
 
     private final Map<HashIndex, byte[]> scriptPubKeyCache;
@@ -285,7 +287,7 @@ public class BitcoindClient {
                 socket.setReconnectIVLMax(10_000);
                 socket.subscribe("sequence");
                 socket.connect(endpoint);
-                log.info("Subscribed to Bitcoin Core ZMQ sequence publisher at {}", endpoint);
+                log.info("Subscribed to ZMQ sequence publisher at {}", endpoint);
 
                 while(!stopped && !Thread.currentThread().isInterrupted()) {
                     String topic = socket.recvStr();
@@ -304,9 +306,14 @@ public class BitcoindClient {
                         if(!zmqQueue.offer(new MempoolSeqEvent(txid, label == 'R'))) {
                             log.warn("ZMQ mempool queue full, dropping {} for txid {} (safety-net diff will recover it)", label, txid);
                         }
+                    } else if(label == 'C' || label == 'D') {
+                        //block connect/disconnect: don't ingest here, just kick an immediate PollTask run - reorg detection, tip update and the forced mempool diff all live there
+                        //pollPending coalesces bursts (testnet3 difficulty-reset storms, multi-block reorgs, post-outage catch-up) down to ~1 in-flight + 1 queued
+                        if(!stopped && pollPending.compareAndSet(false, true)) {
+                            timer.schedule(new PollTask(), 0);
+                        }
                     }
                     //'R' fires for non-block removals only (RBF/eviction/expiry); mined txs produce 'C' (block connect) with no per-tx 'R'
-                    //'C'/'D' (block connect/disconnect) are handled by the polling loop
                 }
             } catch(Throwable t) {
                 if(!stopped) {
@@ -436,11 +443,15 @@ public class BitcoindClient {
     private class PollTask extends TimerTask {
         @Override
         public void run() {
+            //clear at the start: a 'C' arriving while this run is in flight re-arms pollPending and schedules exactly one follow-up poll (which picks up anything connected during this run)
+            pollPending.set(false);
+
             if(stopped) {
                 timer.cancel();
             }
 
             try {
+                boolean newBlock = false;
                 if(syncing) {
                     BlockchainInfo blockchainInfo = getBitcoindService().getBlockchainInfo();
                     if(blockchainInfo.initialblockdownload() && !isEmptyBlockchain(blockchainInfo)) {
@@ -481,6 +492,7 @@ public class BitcoindClient {
                         Frigate.getEventBus().post(new BlockReorgSyncComplete(reorgStartHeight));
 
                         lastBlock = null;
+                        newBlock = true;
                     }
                 }
 
@@ -493,11 +505,13 @@ public class BitcoindClient {
                     log.debug("New block height " + tip.height());
                     Frigate.getEventBus().post(tip);
                     updateBlocksIndex();
+                    newBlock = true;
                 }
 
                 boolean zmqHealthy = zmqContext != null && lastZmqMessageMs != 0L && System.currentTimeMillis() - lastZmqMessageMs < ZMQ_STALENESS_THRESHOLD_MS;
                 long mempoolDiffInterval = zmqHealthy ? ZMQ_MEMPOOL_DIFF_INTERVAL_MS : POLL_MEMPOOL_DIFF_INTERVAL_MS;
-                if(System.currentTimeMillis() - lastMempoolDiffMs >= mempoolDiffInterval) {
+                //force the diff when a block was just connected/reorged: a batch of txids left the mempool at once (mined txs get no per-tx 'R'), evict them now rather than up to ZMQ_MEMPOOL_DIFF_INTERVAL_MS later
+                if(newBlock || System.currentTimeMillis() - lastMempoolDiffMs >= mempoolDiffInterval) {
                     updateMempoolIndex();
                     lastMempoolDiffMs = System.currentTimeMillis();
                 }
