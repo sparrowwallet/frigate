@@ -63,7 +63,7 @@ public class BitcoindClient {
     private volatile Thread zmqSubscriberThread;
     private volatile Thread zmqConsumerThread;
     private volatile long lastZmqMessageMs;
-    private final BlockingQueue<Sha256Hash> zmqAddedQueue = new LinkedBlockingQueue<>(50_000);
+    private final BlockingQueue<MempoolSeqEvent> zmqQueue = new LinkedBlockingQueue<>(50_000);
     private long lastMempoolDiffMs;
 
     private final Map<HashIndex, byte[]> scriptPubKeyCache;
@@ -201,6 +201,8 @@ public class BitcoindClient {
     private synchronized void updateMempoolIndex() {
         HexFormat hexFormat = HexFormat.of();
 
+        //snapshot before the RPC: if the ZMQ consumer removes a txid (R stream) after this point, this diff at worst re-issues a no-op removeFromIndex;
+        //if an RBF re-broadcast lands in getRawMempool() in the same window, the re-broadcast's own A event re-ingests it - the diff is not what re-indexes an RBF re-broadcast
         Set<Sha256Hash> knownTxids = new HashSet<>(mempoolTxIds);
         Set<Sha256Hash> currentMempoolTxids = getBitcoindService().getRawMempool();
         Set<Sha256Hash> removedTxids = new HashSet<>(knownTxids);
@@ -297,13 +299,14 @@ public class BitcoindClient {
                     lastZmqMessageMs = System.currentTimeMillis();
 
                     char label = (char)body[32];
-                    if(label == 'A') {
+                    if(label == 'A' || label == 'R') {
                         Sha256Hash txid = Sha256Hash.wrap(Arrays.copyOf(body, 32));
-                        if(!zmqAddedQueue.offer(txid)) {
-                            log.warn("ZMQ mempool queue full, dropping txid {} (safety-net diff will recover it)", txid);
+                        if(!zmqQueue.offer(new MempoolSeqEvent(txid, label == 'R'))) {
+                            log.warn("ZMQ mempool queue full, dropping {} for txid {} (safety-net diff will recover it)", label, txid);
                         }
                     }
-                    //'R' (mempool removal), 'C'/'D' (block connect/disconnect) are handled by the polling loop
+                    //'R' fires for non-block removals only (RBF/eviction/expiry); mined txs produce 'C' (block connect) with no per-tx 'R'
+                    //'C'/'D' (block connect/disconnect) are handled by the polling loop
                 }
             } catch(Throwable t) {
                 if(!stopped) {
@@ -327,33 +330,39 @@ public class BitcoindClient {
 
     private void zmqConsumerLoop() {
         Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+        Set<Sha256Hash> removedTxids = new HashSet<>();
         Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
         HexFormat hexFormat = HexFormat.of();
 
         while(!stopped && !Thread.currentThread().isInterrupted()) {
             try {
-                Sha256Hash first = zmqAddedQueue.poll(1, TimeUnit.SECONDS);
+                MempoolSeqEvent first = zmqQueue.poll(1, TimeUnit.SECONDS);
                 if(first == null) {
                     continue;
                 }
 
                 long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(FLUSH_DEBOUNCE_MS);
-                ingestMempoolTx(first, spentScriptPubKeys, eligibleTransactions, hexFormat);
-                while(eligibleTransactions.size() < FLUSH_BATCH_SIZE) {
+                processSeqEvent(first, spentScriptPubKeys, eligibleTransactions, removedTxids, hexFormat);
+                while(eligibleTransactions.size() + removedTxids.size() < FLUSH_BATCH_SIZE) {
                     long remaining = deadline - System.nanoTime();
                     if(remaining <= 0) {
                         break;
                     }
-                    Sha256Hash next = zmqAddedQueue.poll(remaining, TimeUnit.NANOSECONDS);
+                    MempoolSeqEvent next = zmqQueue.poll(remaining, TimeUnit.NANOSECONDS);
                     if(next == null) {
                         break;
                     }
-                    ingestMempoolTx(next, spentScriptPubKeys, eligibleTransactions, hexFormat);
+                    processSeqEvent(next, spentScriptPubKeys, eligibleTransactions, removedTxids, hexFormat);
                 }
 
+                //add before remove: if a txid somehow ended up in both batches (it shouldn't - see processSeqEvent), the net result is "absent", correct for an A-then-R
                 if(!eligibleTransactions.isEmpty()) {
                     mempoolIndex.addToIndex(eligibleTransactions);
                     eligibleTransactions.clear();
+                }
+                if(!removedTxids.isEmpty()) {
+                    mempoolIndex.removeFromIndex(removedTxids);
+                    removedTxids.clear();
                 }
                 spentScriptPubKeys.clear();
             } catch(InterruptedException e) {
@@ -362,8 +371,21 @@ public class BitcoindClient {
                 log.error("Error processing ZMQ mempool transactions", t);
                 eligibleTransactions.keySet().forEach(blkTx -> mempoolTxIds.remove(blkTx.getHash()));
                 eligibleTransactions.clear();
+                mempoolTxIds.addAll(removedTxids);
+                removedTxids.clear();
                 spentScriptPubKeys.clear();
             }
+        }
+    }
+
+    private void processSeqEvent(MempoolSeqEvent event, Map<HashIndex, Script> spentScriptPubKeys, Map<BlockTransaction, byte[]> eligibleTransactions, Set<Sha256Hash> removedTxids, HexFormat hexFormat) {
+        if(event.removed()) {
+            if(mempoolTxIds.remove(event.txid())) {
+                removedTxids.add(event.txid());
+                eligibleTransactions.keySet().removeIf(blkTx -> blkTx.getHash().equals(event.txid()));
+            }
+        } else {
+            ingestMempoolTx(event.txid(), spentScriptPubKeys, eligibleTransactions, hexFormat);
         }
     }
 
@@ -628,4 +650,6 @@ public class BitcoindClient {
     public boolean containsSubmitPackage() {
         return networkInfo.version() >= MIN_SUBMIT_PACKAGE_VERSION;
     }
+
+    private record MempoolSeqEvent(Sha256Hash txid, boolean removed) {}
 }
