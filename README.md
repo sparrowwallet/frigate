@@ -393,6 +393,7 @@ connect = true
 # authType = "COOKIE"            # COOKIE or USERPASS
 # dataDir = "/home/bitcoin/.bitcoin"
 # auth = "user:password"         # only needed for USERPASS
+# zmqSequenceEndpoint = "tcp://127.0.0.1:28332"   # bitcoind -zmqpubsequence endpoint for low-latency mempool ingestion
 
 [index]
 # startHeight = 0                # default: 709632 on mainnet (Taproot activation), 0 on testnet
@@ -419,6 +420,11 @@ This is useful if an index has already been built and you just want to serve que
 The `authType` can be `COOKIE` (default) or `USERPASS`.
 For cookie authentication, set `dataDir` to the Bitcoin Core data directory if it is not in the default location.
 For user/password authentication, set `auth` to `user:password`.
+
+When `zmqSequenceEndpoint` is set, Frigate subscribes to Bitcoin Core's ZMQ `sequence` publisher for low-latency mempool ingestion (sub-100ms instead of up to 5s).
+This requires Bitcoin Core to be started with `-zmqpubsequence=tcp://...:<port>` matching this endpoint, and a Bitcoin Core build with ZMQ support compiled in.
+Release binaries from bitcoincore.org include ZMQ support; a from-source build needs the ZeroMQ development library (e.g. `libzmq3-dev`) and an explicit `-DWITH_ZMQ=ON`, since CMake silently disables ZMQ if the library is not found.
+Verify support with `bitcoin-cli getzmqnotifications` — a `-32601 Method not found` error means the binary has no ZMQ support.
 
 ### Index
 

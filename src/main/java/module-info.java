@@ -10,6 +10,7 @@ module com.sparrowwallet.frigate {
     requires com.google.gson;
     requires com.google.common;
     requires org.jcommander;
+    requires org.zeromq.jeromq;
     requires org.slf4j;
     requires java.sql;
     requires static java.desktop;

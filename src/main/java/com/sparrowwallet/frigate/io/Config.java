@@ -236,6 +236,7 @@ public class Config {
         private String authType;
         private String dataDir;
         private String auth;
+        private String zmqSequenceEndpoint;
 
         public Boolean getConnect() {
             return connect;
@@ -302,6 +303,14 @@ public class Config {
         @JsonIgnore
         public Server getServerObj() {
             return server != null ? Server.fromString(server) : null;
+        }
+
+        public String getZmqSequenceEndpoint() {
+            return zmqSequenceEndpoint;
+        }
+
+        public void setZmqSequenceEndpoint(String zmqSequenceEndpoint) {
+            this.zmqSequenceEndpoint = zmqSequenceEndpoint;
         }
     }
 

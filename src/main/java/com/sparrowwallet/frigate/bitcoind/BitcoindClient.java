@@ -16,9 +16,16 @@ import com.sparrowwallet.frigate.io.RecentBlocksMap;
 import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.zeromq.SocketType;
+import org.zeromq.ZContext;
+import org.zeromq.ZMQ;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -28,6 +35,12 @@ public class BitcoindClient {
 
     private static final int MAX_REORG_DEPTH = 10;
     public static final int MIN_SUBMIT_PACKAGE_VERSION = 280000;
+
+    private static final int FLUSH_BATCH_SIZE = 50;
+    private static final long FLUSH_DEBOUNCE_MS = 100;
+    private static final long ZMQ_MEMPOOL_DIFF_INTERVAL_MS = 30_000;
+    private static final long POLL_MEMPOOL_DIFF_INTERVAL_MS = 5_000;
+    private static final long ZMQ_STALENESS_THRESHOLD_MS = 60_000;
 
     private final JsonRpcClient jsonRpcClient;
     private final Timer timer = new Timer(true);
@@ -46,8 +59,15 @@ public class BitcoindClient {
 
     private volatile boolean stopped;
 
+    private volatile ZContext zmqContext;
+    private volatile Thread zmqSubscriberThread;
+    private volatile Thread zmqConsumerThread;
+    private volatile long lastZmqMessageMs;
+    private final BlockingQueue<Sha256Hash> zmqAddedQueue = new LinkedBlockingQueue<>(50_000);
+    private long lastMempoolDiffMs;
+
     private final Map<HashIndex, byte[]> scriptPubKeyCache;
-    private final Set<Sha256Hash> mempoolTxIds = new HashSet<>();
+    private final Set<Sha256Hash> mempoolTxIds = ConcurrentHashMap.newKeySet();
     private final RecentBlocksMap recentBlocksMap = new RecentBlocksMap(MAX_REORG_DEPTH);
 
     public BitcoindClient(Index blocksIndex, Index mempoolIndex) {
@@ -87,7 +107,7 @@ public class BitcoindClient {
         this.mempoolIndex = mempoolIndex;
 
         int cacheSize = config.getIndex().getCacheSizeEntries();
-        this.scriptPubKeyCache = lruCache(cacheSize);
+        this.scriptPubKeyCache = Collections.synchronizedMap(lruCache(cacheSize));
     }
 
     public void initialize() {
@@ -127,7 +147,13 @@ public class BitcoindClient {
         log.info("Initializing indexes...");
         updateBlocksIndex();
         updateMempoolIndex();
+        lastMempoolDiffMs = System.currentTimeMillis();
         Frigate.getEventBus().post(tip);
+
+        String zmqEndpoint = Config.get().getCore().getZmqSequenceEndpoint();
+        if(zmqEndpoint != null && !zmqEndpoint.isBlank()) {
+            startZmqSequenceSubscriber(zmqEndpoint);
+        }
     }
 
     private synchronized void updateBlocksIndex() {
@@ -171,58 +197,186 @@ public class BitcoindClient {
     }
 
     private synchronized void updateMempoolIndex() {
-        BitcoindClientService bitcoindService = getBitcoindService();
         HexFormat hexFormat = HexFormat.of();
 
-        Set<Sha256Hash> currentMempoolTxids = bitcoindService.getRawMempool();
-        Set<Sha256Hash> removedTxids = new HashSet<>(mempoolTxIds);
+        Set<Sha256Hash> knownTxids = new HashSet<>(mempoolTxIds);
+        Set<Sha256Hash> currentMempoolTxids = getBitcoindService().getRawMempool();
+        Set<Sha256Hash> removedTxids = new HashSet<>(knownTxids);
         removedTxids.removeAll(currentMempoolTxids);
         Set<Sha256Hash> addedTxids = new HashSet<>(currentMempoolTxids);
-        addedTxids.removeAll(mempoolTxIds);
+        addedTxids.removeAll(knownTxids);
 
         Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
         Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
 
-        for(Sha256Hash addedTxid : addedTxids) {
-            try {
-                String txHex = (String)getBitcoindService().getRawTransaction(addedTxid.toString(), false);
-                Transaction tx = new Transaction(hexFormat.parseHex(txHex));
-                for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
-                    byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
-                    addtoScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
-                }
-
-                if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
-                    for(TransactionInput txInput : tx.getInputs()) {
-                        HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
-                        spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
-                    }
-
-                    byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
-                    if(tweak != null) {
-                        BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), 0, null, 0L, tx, null);
-                        eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
-                    }
-                }
-            } catch(JsonRpcException e) {
-                //ignore, transaction removed from mempool
+        try {
+            for(Sha256Hash addedTxid : addedTxids) {
+                ingestMempoolTx(addedTxid, spentScriptPubKeys, eligibleTransactions, hexFormat);
             }
-        }
 
-        if(!removedTxids.isEmpty()) {
-            mempoolIndex.removeFromIndex(removedTxids);
-        }
-        if(!eligibleTransactions.isEmpty()) {
-            mempoolIndex.addToIndex(eligibleTransactions);
+            if(!removedTxids.isEmpty()) {
+                mempoolIndex.removeFromIndex(removedTxids);
+            }
+            if(!eligibleTransactions.isEmpty()) {
+                mempoolIndex.addToIndex(eligibleTransactions);
+            }
+        } catch(RuntimeException e) {
+            //nothing was committed to the index - drop the would-be-indexed txids so a later diff retries them
+            eligibleTransactions.keySet().forEach(blkTx -> mempoolTxIds.remove(blkTx.getHash()));
+            throw e;
         }
 
         mempoolTxIds.removeAll(removedTxids);
-        mempoolTxIds.addAll(addedTxids);
+    }
+
+    /**
+     * Ingest a single mempool transaction: fetch it from bitcoind, cache its output scriptPubKeys, and if it has a taproot
+     * output, compute the silent payments tweak and add it to the supplied eligible transactions batch. Idempotent — gated on
+     * an atomic insert into {@link #mempoolTxIds}, so a txid already ingested (via ZMQ or the safety-net diff) is skipped.
+     */
+    private void ingestMempoolTx(Sha256Hash txid, Map<HashIndex, Script> spentScriptPubKeys, Map<BlockTransaction, byte[]> eligibleTransactions, HexFormat hexFormat) {
+        if(!mempoolTxIds.add(txid)) {
+            return;
+        }
+
+        BitcoindClientService bitcoindService = getBitcoindService();
+        try {
+            String txHex = (String)bitcoindService.getRawTransaction(txid.toString(), false);
+            Transaction tx = new Transaction(hexFormat.parseHex(txHex));
+            for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
+                byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
+                addtoScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
+            }
+
+            if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
+                for(TransactionInput txInput : tx.getInputs()) {
+                    HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
+                    spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
+                }
+
+                byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
+                if(tweak != null) {
+                    BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), 0, null, 0L, tx, null);
+                    eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
+                }
+            }
+        } catch(JsonRpcException e) {
+            //transaction removed from mempool before we could fetch it - leave it in mempoolTxIds
+        } catch(RuntimeException e) {
+            //transient failure - drop the txid so a later diff re-ingests it
+            mempoolTxIds.remove(txid);
+            throw e;
+        }
+    }
+
+    private void startZmqSequenceSubscriber(String endpoint) {
+        if(stopped) {
+            return;
+        }
+
+        zmqContext = new ZContext();
+        zmqSubscriberThread = Thread.ofPlatform().daemon().name("BitcoindZmqSequence").start(() -> {
+            try(ZMQ.Socket socket = zmqContext.createSocket(SocketType.SUB)) {
+                socket.setReconnectIVL(100);
+                socket.setReconnectIVLMax(10_000);
+                socket.subscribe("sequence");
+                socket.connect(endpoint);
+                log.info("Subscribed to Bitcoin Core ZMQ sequence publisher at {}", endpoint);
+
+                while(!stopped && !Thread.currentThread().isInterrupted()) {
+                    String topic = socket.recvStr();
+                    byte[] body = socket.hasReceiveMore() ? socket.recv() : null;
+                    while(socket.hasReceiveMore()) {
+                        socket.recv();  //drain remaining frames (the per-topic sequence number, plus any added in future bitcoind versions)
+                    }
+                    if(!"sequence".equals(topic) || body == null || body.length < 33) {
+                        continue;
+                    }
+                    lastZmqMessageMs = System.currentTimeMillis();
+
+                    char label = (char)body[32];
+                    if(label == 'A') {
+                        Sha256Hash txid = Sha256Hash.wrap(Arrays.copyOf(body, 32));
+                        if(!zmqAddedQueue.offer(txid)) {
+                            log.warn("ZMQ mempool queue full, dropping txid {} (safety-net diff will recover it)", txid);
+                        }
+                    }
+                    //'R' (mempool removal), 'C'/'D' (block connect/disconnect) are handled by the polling loop
+                }
+            } catch(Throwable t) {
+                if(!stopped) {
+                    log.error("Bitcoin Core ZMQ sequence subscriber exited", t);
+                }
+            }
+        });
+
+        zmqConsumerThread = Thread.ofPlatform().daemon().name("BitcoindZmqConsumer").start(this::zmqConsumerLoop);
+
+        timer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                if(!stopped && lastZmqMessageMs == 0L) {
+                    log.warn("No ZMQ messages received from Bitcoin Core within 60s at {} - verify -zmqpubsequence is configured on this endpoint. " +
+                            "Mempool ingestion latency will be up to {}s until ZMQ messages arrive", endpoint, ZMQ_MEMPOOL_DIFF_INTERVAL_MS / 1000);
+                }
+            }
+        }, 60_000);
+    }
+
+    private void zmqConsumerLoop() {
+        Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+        Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
+        HexFormat hexFormat = HexFormat.of();
+
+        while(!stopped && !Thread.currentThread().isInterrupted()) {
+            try {
+                Sha256Hash first = zmqAddedQueue.poll(1, TimeUnit.SECONDS);
+                if(first == null) {
+                    continue;
+                }
+
+                long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(FLUSH_DEBOUNCE_MS);
+                ingestMempoolTx(first, spentScriptPubKeys, eligibleTransactions, hexFormat);
+                while(eligibleTransactions.size() < FLUSH_BATCH_SIZE) {
+                    long remaining = deadline - System.nanoTime();
+                    if(remaining <= 0) {
+                        break;
+                    }
+                    Sha256Hash next = zmqAddedQueue.poll(remaining, TimeUnit.NANOSECONDS);
+                    if(next == null) {
+                        break;
+                    }
+                    ingestMempoolTx(next, spentScriptPubKeys, eligibleTransactions, hexFormat);
+                }
+
+                if(!eligibleTransactions.isEmpty()) {
+                    mempoolIndex.addToIndex(eligibleTransactions);
+                    eligibleTransactions.clear();
+                }
+                spentScriptPubKeys.clear();
+            } catch(InterruptedException e) {
+                return;
+            } catch(Throwable t) {
+                log.error("Error processing ZMQ mempool transactions", t);
+                eligibleTransactions.keySet().forEach(blkTx -> mempoolTxIds.remove(blkTx.getHash()));
+                eligibleTransactions.clear();
+                spentScriptPubKeys.clear();
+            }
+        }
     }
 
     public void stop() {
         timer.cancel();
         stopped = true;
+        if(zmqSubscriberThread != null) {
+            zmqSubscriberThread.interrupt();
+        }
+        if(zmqConsumerThread != null) {
+            zmqConsumerThread.interrupt();
+        }
+        if(zmqContext != null) {
+            zmqContext.close();
+        }
     }
 
     public BitcoindClientService getBitcoindService() {
@@ -317,7 +471,12 @@ public class BitcoindClient {
                     updateBlocksIndex();
                 }
 
-                updateMempoolIndex();
+                boolean zmqHealthy = zmqContext != null && lastZmqMessageMs != 0L && System.currentTimeMillis() - lastZmqMessageMs < ZMQ_STALENESS_THRESHOLD_MS;
+                long mempoolDiffInterval = zmqHealthy ? ZMQ_MEMPOOL_DIFF_INTERVAL_MS : POLL_MEMPOOL_DIFF_INTERVAL_MS;
+                if(System.currentTimeMillis() - lastMempoolDiffMs >= mempoolDiffInterval) {
+                    updateMempoolIndex();
+                    lastMempoolDiffMs = System.currentTimeMillis();
+                }
 
                 lastBlock = blockchainInfo.bestblockhash();
             } catch(Exception e) {
