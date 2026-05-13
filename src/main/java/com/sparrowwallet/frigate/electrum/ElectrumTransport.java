@@ -61,7 +61,8 @@ public class ElectrumTransport implements Transport, Closeable {
             int port = electrumServer.hasPort() ? electrumServer.getPort() : DEFAULT_PORT;
 
             SocketFactory socketFactory = SocketFactory.getDefault();
-            this.socket = socketFactory.createSocket(host, port);
+            this.socket = socketFactory.createSocket();
+            this.socket.connect(new InetSocketAddress(host, port));
             this.socket.setSoTimeout(30000); // 30 second timeout for reads
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8)));
             this.in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
