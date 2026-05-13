@@ -21,6 +21,8 @@ import org.zeromq.ZContext;
 import org.zeromq.ZMQ;
 
 import java.io.File;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.*;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -153,10 +155,25 @@ public class BitcoindClient {
         Frigate.getEventBus().post(tip);
 
         String zmqEndpoint = Config.get().getCore().getZmqSequenceEndpoint();
+        boolean autoDiscoveryAttempted = false;
+        boolean zmqUnsupported = false;
+        if((zmqEndpoint == null || zmqEndpoint.isBlank()) && isLoopbackBitcoind()) {
+            autoDiscoveryAttempted = true;
+            ZmqDiscovery discovery = discoverZmqSequenceEndpoint();
+            zmqEndpoint = discovery.endpoint();
+            zmqUnsupported = discovery.unsupported();
+        }
         if(zmqEndpoint != null && !zmqEndpoint.isBlank()) {
             startZmqSequenceSubscriber(zmqEndpoint);
         } else {
-            log.warn("Polling bitcoind every {}s, consider configuring zmqSequenceEndpoint for more responsive updates", POLL_MEMPOOL_DIFF_INTERVAL_MS / 1000);
+            long pollSeconds = POLL_MEMPOOL_DIFF_INTERVAL_MS / 1000;
+            String fix = zmqUnsupported ? "This Bitcoin Core binary was built without ZMQ support — install a release build, or rebuild with ZeroMQ (-DWITH_ZMQ=ON)"
+                    : autoDiscoveryAttempted ? "Add -zmqpubsequence=tcp://127.0.0.1:28336 to bitcoin.conf" : "Enable -zmqpubsequence in bitcoin.conf and set zmqSequenceEndpoint in config.toml to match";
+            if(Config.get().getServer().getBackendElectrumServer() != null) {
+                log.warn("Polling bitcoind every {}s with backendElectrumServer configured — clients may briefly display incorrect amounts for silent payments transactions. {}", pollSeconds, fix);
+            } else {
+                log.warn("Polling bitcoind every {}s, for more responsive updates {}", pollSeconds, fix);
+            }
         }
     }
 
@@ -273,6 +290,47 @@ public class BitcoindClient {
             mempoolTxIds.remove(txid);
             throw e;
         }
+    }
+
+    private boolean isLoopbackBitcoind() {
+        Server coreServer = Config.get().getCore().getServerObj();
+        String host = coreServer != null ? coreServer.getHost() : "127.0.0.1";
+        try {
+            return InetAddress.getByName(host).isLoopbackAddress();
+        } catch(UnknownHostException e) {
+            return false;
+        }
+    }
+
+    private ZmqDiscovery discoverZmqSequenceEndpoint() {
+        try {
+            for(ZmqNotification notification : getBitcoindService().getZmqNotifications()) {
+                if("pubsequence".equals(notification.type()) && notification.address() != null) {
+                    return new ZmqDiscovery(normaliseZmqAddress(notification.address()), false);
+                }
+            }
+        } catch(JsonRpcException e) {
+            if(e.getErrorMessage() != null && e.getErrorMessage().getCode() == -32601) {
+                return new ZmqDiscovery(null, true);
+            }
+            log.debug("Could not auto-discover ZMQ endpoint from Bitcoin Core", e);
+        } catch(Exception e) {
+            log.debug("Could not auto-discover ZMQ endpoint from Bitcoin Core", e);
+        }
+
+        return new ZmqDiscovery(null, false);
+    }
+
+    private static String normaliseZmqAddress(String address) {
+        //wildcard binds aren't usable as connect targets; substitute loopback
+        if(address.startsWith("tcp://0.0.0.0:")) {
+            return "tcp://127.0.0.1:" + address.substring("tcp://0.0.0.0:".length());
+        }
+        if(address.startsWith("tcp://[::]:")) {
+            return "tcp://[::1]:" + address.substring("tcp://[::]:".length());
+        }
+
+        return address;
     }
 
     private void startZmqSequenceSubscriber(String endpoint) {
@@ -666,4 +724,6 @@ public class BitcoindClient {
     }
 
     private record MempoolSeqEvent(Sha256Hash txid, boolean removed) {}
+
+    private record ZmqDiscovery(String endpoint, boolean unsupported) {}
 }

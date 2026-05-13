@@ -8,6 +8,7 @@ import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcParam;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcService;
 import com.sparrowwallet.drongo.protocol.Sha256Hash;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -19,6 +20,9 @@ public interface BitcoindClientService {
 
     @JsonRpcMethod("getnetworkinfo")
     NetworkInfo getNetworkInfo();
+
+    @JsonRpcMethod("getzmqnotifications")
+    List<ZmqNotification> getZmqNotifications();
 
     @JsonRpcMethod("estimatesmartfee")
     FeeInfo estimateSmartFee(@JsonRpcParam("conf_target") int blocks, @JsonRpcParam("estimate_mode") @JsonRpcOptional String mode);
