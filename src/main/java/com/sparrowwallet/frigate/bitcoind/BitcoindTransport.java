@@ -3,17 +3,17 @@ package com.sparrowwallet.frigate.bitcoind;
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.io.Server;
+import com.sparrowwallet.frigate.io.SslUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.net.ssl.*;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLSocketFactory;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
 import java.util.Base64;
 
 public class BitcoindTransport implements Transport {
@@ -54,7 +54,7 @@ public class BitcoindTransport implements Transport {
         HttpURLConnection connection = (HttpURLConnection)bitcoindUrl.openConnection();
 
         if(connection instanceof HttpsURLConnection httpsURLConnection) {
-            SSLSocketFactory sslSocketFactory = getTrustAllSocketFactory();
+            SSLSocketFactory sslSocketFactory = SslUtil.getTrustAllSocketFactory();
             if(sslSocketFactory != null) {
                 httpsURLConnection.setSSLSocketFactory(sslSocketFactory);
             }
@@ -135,29 +135,4 @@ public class BitcoindTransport implements Transport {
         return bitcoindDir;
     }
 
-    private SSLSocketFactory getTrustAllSocketFactory() {
-        TrustManager[] trustAllCerts = new TrustManager[] {
-                new X509TrustManager() {
-                    public X509Certificate[] getAcceptedIssuers() {
-                        return new X509Certificate[0];
-                    }
-
-                    public void checkClientTrusted(X509Certificate[] certs, String authType) throws CertificateException {
-                    }
-
-                    public void checkServerTrusted(X509Certificate[] certs, String authType) throws CertificateException {
-                    }
-                }
-        };
-
-        try {
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(null, trustAllCerts, null);
-            return sslContext.getSocketFactory();
-        } catch (Exception e) {
-            log.error("Error creating SSL socket factory", e);
-        }
-
-        return null;
-    }
 }

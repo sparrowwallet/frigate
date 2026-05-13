@@ -49,7 +49,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         this.clientSocket = clientSocket;
         Server backendServer = Config.get().getServer().getBackendElectrumServerObj();
         if(backendServer != null) {
-            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), new BackendSubscriptionService());
+            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(), new BackendSubscriptionService());
             this.reader = Thread.ofVirtual().name("BackendServerReadThread-" + System.identityHashCode(this)).unstarted(new ReadRunnable(backendTransport));
             reader.setUncaughtExceptionHandler(this);
         } else {

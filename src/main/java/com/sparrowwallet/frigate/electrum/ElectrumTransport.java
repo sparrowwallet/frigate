@@ -3,10 +3,13 @@ package com.sparrowwallet.frigate.electrum;
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.net.HostAndPort;
+import com.sparrowwallet.frigate.io.Protocol;
+import com.sparrowwallet.frigate.io.SslUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.net.SocketFactory;
+import javax.net.ssl.SSLSocketFactory;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
@@ -26,6 +29,7 @@ public class ElectrumTransport implements Transport, Closeable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumTransport.class);
 
     private final HostAndPort electrumServer;
+    private final Protocol protocol;
     private Socket socket;
     private String response;
 
@@ -50,8 +54,9 @@ public class ElectrumTransport implements Transport, Closeable {
     private PrintWriter out;
     private BufferedReader in;
 
-    public ElectrumTransport(HostAndPort electrumServer, Object subscriptionService) {
+    public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService) {
         this.electrumServer = electrumServer;
+        this.protocol = protocol;
         this.subscriptionService = subscriptionService;
     }
 
@@ -60,7 +65,18 @@ public class ElectrumTransport implements Transport, Closeable {
             String host = electrumServer.getHost();
             int port = electrumServer.hasPort() ? electrumServer.getPort() : DEFAULT_PORT;
 
-            SocketFactory socketFactory = SocketFactory.getDefault();
+            SocketFactory socketFactory;
+            if(protocol == Protocol.SSL) {
+                SSLSocketFactory sslSocketFactory = SslUtil.getTrustAllSocketFactory();
+                if(sslSocketFactory == null) {
+                    log.error("Could not create SSL socket factory for Electrum server: " + host);
+                    return;
+                }
+                socketFactory = sslSocketFactory;
+            } else {
+                socketFactory = SocketFactory.getDefault();
+            }
+
             this.socket = socketFactory.createSocket();
             this.socket.connect(new InetSocketAddress(host, port));
             this.socket.setSoTimeout(30000); // 30 second timeout for reads

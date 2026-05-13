@@ -10,6 +10,7 @@ import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumServerService;
 import com.sparrowwallet.frigate.electrum.ElectrumTransport;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsSubscription;
+import com.sparrowwallet.frigate.io.Protocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,7 +76,7 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
     }
 
     public void connect() {
-        transport = new ElectrumTransport(server, new SubscriptionService());
+        transport = new ElectrumTransport(server, Protocol.TCP, new SubscriptionService());
         transport.connect();
         reader = Thread.ofVirtual().name("ElectrumServerReadThread").unstarted(new ReadRunnable());
         reader.setUncaughtExceptionHandler(FrigateCli.this);
