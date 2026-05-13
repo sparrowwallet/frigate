@@ -3,7 +3,6 @@ package com.sparrowwallet.frigate.electrum;
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.net.HostAndPort;
-import com.google.gson.Gson;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,11 +10,15 @@ import javax.net.SocketFactory;
 import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
-import java.util.Objects;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static com.sparrowwallet.frigate.electrum.ElectrumServerRunnable.DEFAULT_PORT;
 
@@ -39,7 +42,7 @@ public class ElectrumTransport implements Transport, Closeable {
     private boolean closed = false;
     private Exception lastException;
 
-    private static final Gson GSON = new Gson();
+    private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
 
     private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
     private final Object subscriptionService;
@@ -72,17 +75,20 @@ public class ElectrumTransport implements Transport, Closeable {
 
     @Override
     public String pass(String request) throws IOException {
+        Set<String> sentIdSet = extractIdSet(request);
         clientRequestLock.lock();
         try {
-            Rpc sentRpc = request.startsWith("{") ? GSON.fromJson(request, Rpc.class) : null;
-            Rpc recvRpc;
-            String recv;
-
             writeRequest(request);
+
+            String recv;
+            Set<String> recvIdSet;
             do {
                 recv = readResponse();
-                recvRpc = recv.startsWith("{") ? GSON.fromJson(response, Rpc.class) : null;
-            } while(!Objects.equals(recvRpc, sentRpc));
+                recvIdSet = extractIdSet(recv);
+                if(!sentIdSet.equals(recvIdSet)) {
+                    log.info("Discarding stale response with ids " + recvIdSet + " (expected " + sentIdSet + ")");
+                }
+            } while(!sentIdSet.equals(recvIdSet));
 
             return recv;
         } finally {
@@ -253,24 +259,15 @@ public class ElectrumTransport implements Transport, Closeable {
         return closed;
     }
 
-    public static class Rpc {
-        public String id;
-
-        @Override
-        public boolean equals(Object o) {
-            if(this == o) {
-                return true;
-            }
-            if(o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            Rpc rpc = (Rpc) o;
-            return Objects.equals(id, rpc.id);
+    private static Set<String> extractIdSet(String json) {
+        if(json == null || json.isEmpty()) {
+            return Collections.emptySet();
         }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(id);
+        Matcher m = ID_PATTERN.matcher(json);
+        Set<String> ids = new LinkedHashSet<>();
+        while(m.find()) {
+            ids.add(m.group(1));
         }
+        return ids;
     }
 }
