@@ -408,9 +408,12 @@ connect = true
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
 
 [server]
-# host = "localhost"              # advertised in server.features (set to public hostname for public-facing deployments)
-# tcpPort = 57001
-# backendElectrumServer = "tcp://localhost:50001"
+# host = "localhost"             # advertised in server.features (set to public hostname for public-facing deployments)
+# tcp = "tcp://0.0.0.0:50001"    # plaintext listener bind URL; omit (or "") to disable. Default if neither tcp nor ssl is set.
+# ssl = "ssl://0.0.0.0:50002"    # SSL listener bind URL; omit to disable
+# sslCert = "cert.pem"           # PEM certificate (chain allowed); bare filename resolves under Frigate's home dir, or use an absolute path
+# sslKey  = "key.pem"            # PEM-encoded PKCS#8 private key; bare filename resolves under Frigate's home dir, or use an absolute path
+# backendElectrumServer = "tcp://localhost:60001"   # backend must listen on a port distinct from Frigate's tcp/ssl listeners above
 ```
 
 ### Core
@@ -454,11 +457,26 @@ Requests exceeding either limit are rejected with a JSON-RPC `-32602 Invalid par
 
 ### Server
 
-The `port` setting controls the Electrum server listening port (default: 57001).
+Listeners are configured as bind URLs in the scheme `tcp://` or `ssl://` followed by a host and port.
+The `tcp` setting is the plaintext listener (default: `tcp://0.0.0.0:50001`), and `ssl` enables a TLS listener (e.g. `ssl://0.0.0.0:50002`).
+Each URL specifies the bind interface — use `127.0.0.1` to restrict a listener to localhost, or `0.0.0.0` to bind all interfaces.
+Both listeners can run simultaneously, or either can be omitted (e.g. set `tcp = ""` to run TLS only).
+If neither `tcp` nor `ssl` is set, Frigate defaults to tcp on `0.0.0.0:50001`.
+
+To enable TLS, set `ssl` and supply a certificate and private key via `sslCert` and `sslKey`.
+Bare filenames are resolved relative to Frigate's home directory (the per-network directory that holds `config.toml`). Absolute paths are used as-is.
+The certificate file may contain a single certificate or a full chain (`fullchain.pem`), and the key file must be an unencrypted PKCS#8 (`-----BEGIN PRIVATE KEY-----`) PEM.
+TLS 1.0, 1.1 and SSLv3 are unconditionally disabled as insecure, and only TLS 1.2 and 1.3 are negotiated.
+
+To generate a self-signed certificate for local or testing use, valid for ten years:
+```shell
+openssl req -x509 -newkey rsa:2048 -keyout ~/.frigate/key.pem -out ~/.frigate/cert.pem -days 3650 -nodes -subj "/CN=localhost"
+```
 
 Frigate currently only implements a selection of Electrum server RPCs directly.
 Any other requests (including address-related lookups) can be proxied to another Electrum server.
 This server is configured with `backendElectrumServer`, and is intended to be used to point to a server running locally on the same host.
+Because Frigate occupies the canonical 50001/50002 Electrum ports, a co-located backend (Fulcrum, ElectrumX, electrs, etc.) must be configured to listen on a different port.
 The Electrum protocol from 1.3 to 1.6 is supported - for 1.6, ensure Bitcoin Core 28 or higher.
 
 ## Usage

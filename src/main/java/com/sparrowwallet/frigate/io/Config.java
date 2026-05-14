@@ -1,7 +1,7 @@
 package com.sparrowwallet.frigate.io;
 
-import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -421,8 +421,10 @@ public class Config {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ServerConfig {
         private String host;
-        @JsonAlias("port")
-        private Integer tcpPort;
+        private String tcp;
+        private String ssl;
+        private String sslCert;
+        private String sslKey;
         private String backendElectrumServer;
 
         public String getHost() {
@@ -433,12 +435,110 @@ public class Config {
             this.host = host;
         }
 
-        public int getTcpPort() {
-            return tcpPort != null ? tcpPort : com.sparrowwallet.frigate.electrum.ElectrumServerRunnable.DEFAULT_PORT;
+        public String getTcp() {
+            return tcp;
         }
 
-        public void setTcpPort(Integer tcpPort) {
-            this.tcpPort = tcpPort;
+        public void setTcp(String tcp) {
+            this.tcp = tcp;
+        }
+
+        @JsonSetter("port")
+        public void setLegacyPort(Integer port) {
+            if(port != null && this.tcp == null) {
+                this.tcp = "tcp://0.0.0.0:" + port;
+            }
+        }
+
+        public String getSsl() {
+            return ssl;
+        }
+
+        public void setSsl(String ssl) {
+            this.ssl = ssl;
+        }
+
+        @JsonIgnore
+        public Server getTcpServer() {
+            if(tcp == null && ssl == null) {
+                return parseListener("tcp", "tcp://0.0.0.0:" + Protocol.TCP.getDefaultPort(), Protocol.TCP);
+            }
+            if(tcp == null || tcp.isEmpty()) {
+                return null;
+            }
+            return parseListener("tcp", tcp, Protocol.TCP);
+        }
+
+        @JsonIgnore
+        public Server getSslServer() {
+            if(ssl == null || ssl.isEmpty()) {
+                return null;
+            }
+            return parseListener("ssl", ssl, Protocol.SSL);
+        }
+
+        @JsonIgnore
+        public boolean isTcpEnabled() {
+            return getTcpServer() != null;
+        }
+
+        @JsonIgnore
+        public boolean isSslEnabled() {
+            return getSslServer() != null;
+        }
+
+        private static Server parseListener(String key, String url, Protocol expected) {
+            Server server;
+            try {
+                server = Server.fromString(url);
+            } catch(IllegalArgumentException e) {
+                throw new com.sparrowwallet.frigate.ConfigurationException("Invalid " + key + " listener URL '" + url + "' under [server] in config.toml: " + e.getMessage(), e);
+            }
+
+            if(server.getProtocol() != expected) {
+                throw new com.sparrowwallet.frigate.ConfigurationException("Listener '" + key + "' must use the " + expected.toUrlString() + " scheme (got '" + url + "')");
+            }
+
+            if(!server.getHostAndPort().hasPort()) {
+                throw new com.sparrowwallet.frigate.ConfigurationException("Listener '" + key + "' must specify an explicit port: '" + url + "'");
+            }
+
+            return server;
+        }
+
+        public static final String DEFAULT_SSL_CERT = "cert.pem";
+        public static final String DEFAULT_SSL_KEY = "key.pem";
+
+        public String getSslCert() {
+            return sslCert;
+        }
+
+        public void setSslCert(String sslCert) {
+            this.sslCert = sslCert;
+        }
+
+        @JsonIgnore
+        public File getSslCertFile() {
+            return resolveFrigateDirPath(sslCert, DEFAULT_SSL_CERT);
+        }
+
+        public String getSslKey() {
+            return sslKey;
+        }
+
+        public void setSslKey(String sslKey) {
+            this.sslKey = sslKey;
+        }
+
+        @JsonIgnore
+        public File getSslKeyFile() {
+            return resolveFrigateDirPath(sslKey, DEFAULT_SSL_KEY);
+        }
+
+        private static File resolveFrigateDirPath(String configured, String defaultName) {
+            String value = (configured == null || configured.isEmpty()) ? defaultName : configured;
+            File file = new File(value);
+            return file.isAbsolute() ? file : new File(Storage.getFrigateDir(), value);
         }
 
         public String getBackendElectrumServer() {

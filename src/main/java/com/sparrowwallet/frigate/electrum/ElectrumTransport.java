@@ -23,8 +23,6 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static com.sparrowwallet.frigate.electrum.ElectrumServerRunnable.DEFAULT_PORT;
-
 public class ElectrumTransport implements Transport, Closeable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumTransport.class);
 
@@ -63,7 +61,7 @@ public class ElectrumTransport implements Transport, Closeable {
     public void connect() {
         try {
             String host = electrumServer.getHost();
-            int port = electrumServer.hasPort() ? electrumServer.getPort() : DEFAULT_PORT;
+            int port = electrumServer.hasPort() ? electrumServer.getPort() : protocol.getDefaultPort();
 
             SocketFactory socketFactory;
             if(protocol == Protocol.SSL) {

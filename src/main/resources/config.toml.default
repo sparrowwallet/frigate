@@ -23,8 +23,11 @@ connect = true
 
 [server]
 # host = "localhost"             # advertised in server.features (set to public hostname for public-facing deployments)
-# tcpPort = 57001
-# backendElectrumServer = "tcp://localhost:50001"
+# tcp = "tcp://0.0.0.0:50001"    # plaintext listener bind URL; omit (or set to "") to disable. Default if neither tcp nor ssl is set.
+# ssl = "ssl://0.0.0.0:50002"    # SSL listener bind URL; omit to disable
+# sslCert = "cert.pem"           # PEM certificate (chain allowed); bare filename resolves under Frigate's home dir, or use an absolute path
+# sslKey  = "key.pem"            # PEM-encoded PKCS#8 private key; bare filename resolves under Frigate's home dir, or use an absolute path
+# backendElectrumServer = "tcp://localhost:60001"   # backend must listen on a port distinct from Frigate's tcp/ssl listeners above
 
 # [database]
 # url = "jdbc:duckdb:/custom/path/frigate.duckdb"

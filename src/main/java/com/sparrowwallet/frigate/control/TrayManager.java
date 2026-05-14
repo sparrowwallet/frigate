@@ -7,6 +7,7 @@ import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumBlockHeader;
 import com.sparrowwallet.frigate.index.SilentPaymentsBlocksIndexUpdate;
 import com.sparrowwallet.frigate.io.Config;
+import com.sparrowwallet.frigate.io.Server;
 import com.sparrowwallet.frigate.io.Storage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -94,7 +95,13 @@ public class TrayManager {
             NumberFormat nf = NumberFormat.getIntegerInstance();
             statusItem.setLabel("Indexing: block " + nf.format(indexedHeight) + " / " + nf.format(tipHeight));
         } else {
-            statusItem.setLabel("Electrum server on port " + Config.get().getServer().getTcpPort());
+            Config.ServerConfig sc = Config.get().getServer();
+            Server tcpServer = sc.getTcpServer();
+            Server sslServer = sc.getSslServer();
+            List<String> ports = new ArrayList<>(2);
+            if(tcpServer != null) ports.add(Integer.toString(tcpServer.getHostAndPort().getPort()));
+            if(sslServer != null) ports.add(Integer.toString(sslServer.getHostAndPort().getPort()));
+            statusItem.setLabel("Electrum server on port " + String.join("/", ports));
         }
     }
 

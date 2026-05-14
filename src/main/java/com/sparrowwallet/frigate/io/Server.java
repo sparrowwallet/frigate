@@ -2,6 +2,9 @@ package com.sparrowwallet.frigate.io;
 
 import com.google.common.net.HostAndPort;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.util.Arrays;
 
 public class Server {
@@ -51,6 +54,11 @@ public class Server {
 
     public String getHost() {
         return getHostAndPort().getHost();
+    }
+
+    public InetSocketAddress getInetSocketAddress() throws UnknownHostException {
+        HostAndPort hostAndPort = getHostAndPort();
+        return new InetSocketAddress(InetAddress.getByName(hostAndPort.getHost()), hostAndPort.getPort());
     }
 
     public boolean isOnionAddress() {

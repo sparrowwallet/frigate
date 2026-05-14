@@ -15,6 +15,7 @@ import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.bitcoind.*;
 import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.frigate.io.Config;
+import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -105,7 +106,11 @@ public class ElectrumServerService {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
             Config.ServerConfig serverConfig = Config.get().getServer();
-            Map<String, ServerFeatures.HostInfo> ourHosts = Map.of(serverConfig.getHost(), new ServerFeatures.HostInfo(serverConfig.getTcpPort(), null));
+            Server tcpServer = serverConfig.getTcpServer();
+            Server sslServer = serverConfig.getSslServer();
+            Integer tcp = tcpServer != null ? tcpServer.getHostAndPort().getPort() : null;
+            Integer ssl = sslServer != null ? sslServer.getHostAndPort().getPort() : null;
+            Map<String, ServerFeatures.HostInfo> ourHosts = Map.of(serverConfig.getHost(), new ServerFeatures.HostInfo(tcp, ssl));
             return electrumBackendService.getServerFeatures().withHosts(ourHosts).withSilentPayments(SILENT_PAYMENTS_SUPPORTED_VERSIONS);
         }
 

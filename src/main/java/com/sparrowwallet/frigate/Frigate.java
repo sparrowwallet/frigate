@@ -10,7 +10,12 @@ import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.drongo.OsType;
 import com.sparrowwallet.frigate.io.Config;
+import com.sparrowwallet.frigate.io.Server;
+import com.sparrowwallet.frigate.io.SslUtil;
 import com.sparrowwallet.frigate.io.Storage;
+import javax.net.ssl.SSLContext;
+import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import com.github.arteam.simplejsonrpc.client.exception.JsonRpcException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,7 +69,11 @@ public class Frigate {
             bitcoindClient.initialize();
         }
 
-        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex), config.getServer().getTcpPort());
+        Config.ServerConfig serverConfig = config.getServer();
+        SSLContext sslContext = serverConfig.isSslEnabled() ? SslUtil.getServerSSLContext(serverConfig.getSslCertFile(), serverConfig.getSslKeyFile()) : null;
+        InetSocketAddress tcpBind = toBindAddress(serverConfig.getTcpServer());
+        InetSocketAddress sslBind = toBindAddress(serverConfig.getSslServer());
+        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex), tcpBind, sslBind, sslContext);
         Thread electrumServerThread = new Thread(electrumServer, "Frigate Electrum Server");
         electrumServerThread.setDaemon(false);
         electrumServerThread.start();
@@ -97,6 +106,18 @@ public class Frigate {
 
     public static EventBus getEventBus() {
         return EVENT_BUS;
+    }
+
+    private static InetSocketAddress toBindAddress(Server server) {
+        if(server == null) {
+            return null;
+        }
+
+        try {
+            return server.getInetSocketAddress();
+        } catch(UnknownHostException e) {
+            throw new ConfigurationException("Cannot resolve listener bind host '" + server.getHost() + "': " + e.getMessage(), e);
+        }
     }
 
     private static Logger getLogger() {
@@ -194,8 +215,20 @@ public class Frigate {
                 return "Cannot connect to Bitcoin Core at " + server + ". Ensure Bitcoin Core is running and the server URL in config.toml is correct, or set connect = false under [core].";
             }
             if(current instanceof BindException) {
-                int port = Config.get().getServer().getTcpPort();
-                return "Port " + port + " is already in use. Another Frigate instance may be running, or change tcpPort under [server] in config.toml.";
+                Config.ServerConfig sc = Config.get().getServer();
+                Server tcpServer = sc.getTcpServer();
+                Server sslServer = sc.getSslServer();
+                String msg = current.getMessage();
+                String which;
+                if(tcpServer != null && sslServer != null) {
+                    int sslPort = sslServer.getHostAndPort().getPort();
+                    which = msg != null && msg.contains(Integer.toString(sslPort)) ? "SSL at " + sslServer.getUrl() : "TCP at " + tcpServer.getUrl();
+                } else if(tcpServer != null) {
+                    which = "TCP at " + tcpServer.getUrl();
+                } else {
+                    which = "SSL at " + sslServer.getUrl();
+                }
+                return "Configured Electrum server listener (" + which + ") is already in use. Another Frigate instance may be running, or change the listener under [server] in config.toml.";
             }
             if(current instanceof IOException ioe && ioe.getMessage() != null) {
                 String msg = ioe.getMessage();
