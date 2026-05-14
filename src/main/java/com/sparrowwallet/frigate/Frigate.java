@@ -47,7 +47,7 @@ public class Frigate {
     private static Object trayManager;
 
     public void start() {
-        getLogger().info("Starting " + SERVER_NAME + " on " + Network.get().getName());
+        getLogger().info("Starting " + SERVER_NAME + " v" + SERVER_VERSION + " on " + Network.get().getName());
         getLogger().info("Using home directory " + Storage.getFrigateHome().getAbsolutePath());
 
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop));
