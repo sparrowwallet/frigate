@@ -1,5 +1,8 @@
 package com.sparrowwallet.frigate.electrum;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.net.HostAndPort;
@@ -45,6 +48,7 @@ public class ElectrumTransport implements Transport, Closeable {
     private Exception lastException;
 
     private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
+    private static final JsonFactory JSON_FACTORY = new JsonFactory();
 
     private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
     private final Object subscriptionService;
@@ -186,11 +190,9 @@ public class ElectrumTransport implements Transport, Closeable {
             while(running) {
                 try {
                     String received = readInputStream(in);
-                    if(received.contains("method") && !received.contains("error")) {
-                        //Handle subscription notification
+                    if(isNotification(received)) {
                         jsonRpcServer.handle(received, subscriptionService);
                     } else {
-                        //Handle client's response
                         response = received;
                         reading = false;
                         readingCondition.signal();
@@ -248,6 +250,26 @@ public class ElectrumTransport implements Transport, Closeable {
         }
 
         return null;
+    }
+
+    private static boolean isNotification(String json) {
+        try(JsonParser parser = JSON_FACTORY.createParser(json)) {
+            if(parser.nextToken() != JsonToken.START_OBJECT) {
+                return false;
+            }
+            while(parser.nextToken() == JsonToken.FIELD_NAME) {
+                String field = parser.currentName();
+                JsonToken value = parser.nextToken();
+                if("method".equals(field)) {
+                    return value == JsonToken.VALUE_STRING;
+                }
+                parser.skipChildren();
+            }
+            return false;
+        } catch(Exception e) {
+            log.warn("Could not parse JSON-RPC message from backend: " + e.getMessage());
+            return false;
+        }
     }
 
     public Exception getLastException() {
