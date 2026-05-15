@@ -228,6 +228,14 @@ client ─TLS/TCP─►│  Frigate :50001 / :50002                    │
 Frigate occupies the canonical Electrum ports (50001/50002). 
 The backend listens on a non-conflicting port (e.g. 60001) bound to localhost, and all non-silent-payments queries are proxied to it transparently.
 
+### Backend Limits
+
+All Frigate client connections to `backendElectrumServer` appear from a single source IP, so backend per-IP caps (e.g. Fulcrum's `max_clients_per_ip`) can refuse new Frigate clients well below the backend's overall capacity.
+The co-located localhost topology above is handled by default: Fulcrum exempts `127.0.0.1/32` and `::1/128`, and ElectrumX exempts all private addresses (RFC1918, loopback, link-local).
+If Frigate runs on a different host from the backend, on Fulcrum add Frigate's IP to `subnets_to_exclude_from_per_ip_limits`.
+On ElectrumX the exemption set is hardcoded to private addresses, so keep Frigate on the same private network.
+electrs imposes no per-IP limits and requires no tuning.
+
 ### Running as a Service
 
 Frigate runs as a long-lived foreground process and integrates straightforwardly with `systemd`. A minimal unit (`/etc/systemd/system/frigate.service`):
@@ -571,6 +579,7 @@ Servers **must** send the response to `blockchain.silentpayments.subscribe` befo
 The `subscription` object in every notification **must** be byte-identical to the one returned in the original `blockchain.silentpayments.subscribe` response with the same `address`, `labels` and `start_height`.
 It identifies which subscription the notification belongs to, not the range that the server happened to scan to produce it.
 All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results.
+Servers **must** also deliver silent payments notifications before any scripthash notification arising from the same block or mempool event, since the silent payments subscription is the discovery channel through which clients learn which scripthashes to subscribe to.
 A `progress` of `1.0` indicates the scan is up to date as of this notification.
 The first such notification marks the end of the historical scan; subsequent `1.0` notifications represent live updates as new blocks and mempool transactions are scanned.
 Clients should flush any buffered history on every `1.0` notification.
