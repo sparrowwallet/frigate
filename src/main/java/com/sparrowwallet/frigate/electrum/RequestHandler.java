@@ -41,7 +41,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     private final Thread reader;
 
     private boolean connected;
-    private boolean headersSubscribed;
+    private volatile boolean headersSubscribed;
     private final Set<String> scriptHashesSubscribed = ConcurrentHashMap.newKeySet();
     private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new ConcurrentHashMap<>();
     private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
@@ -230,8 +230,12 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     @Subscribe
     public void newBlock(ElectrumBlockHeader electrumBlockHeader) {
         if(isHeadersSubscribed()) {
-            notificationService.notifyHeaders(electrumBlockHeader);
+            notifyHeaders(electrumBlockHeader);
         }
+    }
+
+    void notifyHeaders(ElectrumBlockHeader electrumBlockHeader) {
+        notificationService.notifyHeaders(electrumBlockHeader);
     }
 
     @Subscribe

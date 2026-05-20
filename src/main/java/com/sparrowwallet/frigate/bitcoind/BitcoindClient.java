@@ -52,7 +52,7 @@ public class BitcoindClient {
 
     private NetworkInfo networkInfo;
     private String lastBlock;
-    private ElectrumBlockHeader tip;
+    private volatile ElectrumBlockHeader tip;
 
     private Exception lastPollException;
 

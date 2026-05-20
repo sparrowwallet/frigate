@@ -8,11 +8,6 @@ import com.sparrowwallet.frigate.Frigate;
 
 @JsonRpcService
 public class BackendSubscriptionService {
-    @JsonRpcMethod("blockchain.headers.subscribe")
-    public void newBlockHeaderTip(@JsonRpcParam("header") final ElectrumBlockHeader header) {
-        //Nothing required
-    }
-
     @JsonRpcMethod("blockchain.scripthash.subscribe")
     public void scriptHashStatusUpdated(@JsonRpcParam("scripthash") final String scriptHash, @JsonRpcOptional @JsonRpcParam("status") final String status) {
         Frigate.getEventBus().post(new ScriptHashStatus(scriptHash, status));

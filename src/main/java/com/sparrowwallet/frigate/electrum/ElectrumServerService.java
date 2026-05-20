@@ -208,8 +208,18 @@ public class ElectrumServerService {
     @JsonRpcMethod("blockchain.headers.subscribe")
     public ElectrumBlockHeader subscribeHeaders() {
         checkVersionNegotiated();
-        requestHandler.setHeadersSubscribed(true);
-        return bitcoindClient != null ? bitcoindClient.getTip() : new ElectrumBlockHeader(0, null);
+        if(bitcoindClient == null) {
+            throw new UnsupportedOperationException("Configure coreServer to use blockchain.headers.subscribe");
+        }
+        ElectrumBlockHeader tip = bitcoindClient.getTip();
+        requestHandler.runAfterResponse(() -> {
+            requestHandler.setHeadersSubscribed(true);
+            ElectrumBlockHeader currentTip = bitcoindClient.getTip();
+            if(currentTip != null && !currentTip.equals(tip)) {
+                requestHandler.notifyHeaders(currentTip);
+            }
+        });
+        return tip;
     }
 
     @JsonRpcMethod("server.ping")
@@ -229,9 +239,13 @@ public class ElectrumServerService {
     public String subscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
-            String status = electrumBackendService.subscribeScriptHash(scriptHash);
             requestHandler.subscribeScriptHash(scriptHash);
-            return status;
+            try {
+                return electrumBackendService.subscribeScriptHash(scriptHash);
+            } catch(RuntimeException e) {
+                requestHandler.unsubscribeScriptHash(scriptHash);
+                throw e;
+            }
         }
 
         throw new UnsupportedOperationException("Configure backendElectrumServer to use blockchain.scripthash.subscribe");
@@ -241,9 +255,8 @@ public class ElectrumServerService {
     public String unsubscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
-            String status = electrumBackendService.unsubscribeScriptHash(scriptHash);
             requestHandler.unsubscribeScriptHash(scriptHash);
-            return status;
+            return electrumBackendService.unsubscribeScriptHash(scriptHash);
         }
 
         throw new UnsupportedOperationException("Configure backendElectrumServer to use blockchain.scripthash.unsubscribe");
