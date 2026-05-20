@@ -36,6 +36,7 @@ public class Index {
     private static final Logger log = LoggerFactory.getLogger(Index.class);
     public static final String DEFAULT_DB_FILENAME = "frigate.duckdb";
     private static final String TWEAK_TABLE = "tweak";
+    private static final String INDEXED_BLOCK_TABLE = "indexed_block";
     public static final int HISTORY_PAGE_SIZE = 100;
 
     private static final String AUDIT_SCAN_KEY_ENV = "FRIGATE_AUDIT_SCAN_KEY";
@@ -80,9 +81,12 @@ public class Index {
         try {
             dbManager.executeWrite(connection -> {
                 try(Statement stmt = connection.createStatement()) {
-                    return stmt.execute("CREATE TABLE IF NOT EXISTS " + TWEAK_TABLE + " (txid BLOB NOT NULL, height INTEGER NOT NULL, tweak_key BLOB NOT NULL, outputs BIGINT[])");
+                    stmt.execute("CREATE TABLE IF NOT EXISTS " + TWEAK_TABLE + " (txid BLOB NOT NULL, height INTEGER NOT NULL, tweak_key BLOB NOT NULL, outputs BIGINT[])");
+                    stmt.execute("CREATE TABLE IF NOT EXISTS " + INDEXED_BLOCK_TABLE + " (height INTEGER NOT NULL, block_hash BLOB NOT NULL, singleton BOOLEAN PRIMARY KEY DEFAULT true CHECK (singleton))");
+                    return true;
                 }
             });
+            seedIndexedBlockIfEmpty();
         } catch(Exception e) {
             throw new ConfigurationException("Error initialising index", e);
         }
@@ -90,6 +94,30 @@ public class Index {
         if(!inMemory) {
             checkGpuBackend();
         }
+    }
+
+    private void seedIndexedBlockIfEmpty() throws SQLException, InterruptedException {
+        dbManager.executeWrite(connection -> {
+            try(Statement stmt = connection.createStatement();
+                ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM " + INDEXED_BLOCK_TABLE)) {
+                if(rs.next() && rs.getInt(1) == 0) {
+                    try(ResultSet maxRs = stmt.executeQuery("SELECT MAX(height) FROM " + TWEAK_TABLE)) {
+                        if(maxRs.next() && maxRs.getObject(1) != null) {
+                            int maxHeight = maxRs.getInt(1);
+                            if(maxHeight > 0) {
+                                try(PreparedStatement ins = connection.prepareStatement("INSERT INTO " + INDEXED_BLOCK_TABLE + " (height, block_hash) VALUES (?, ?)")) {
+                                    ins.setInt(1, maxHeight);
+                                    ins.setBytes(2, new byte[0]);
+                                    ins.executeUpdate();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return true;
+            }
+        });
     }
 
     private void checkGpuBackend() {
@@ -143,10 +171,29 @@ public class Index {
         dbManager.close();
     }
 
+    public void repairOrphanTweaks() {
+        if(dbManager.isShutdown()) {
+            return;
+        }
+
+        try {
+            int deleted = dbManager.executeWrite(connection -> {
+                try(PreparedStatement ps = connection.prepareStatement("DELETE FROM " + TWEAK_TABLE + " WHERE height > (SELECT height FROM " + INDEXED_BLOCK_TABLE + ")")) {
+                    return ps.executeUpdate();
+                }
+            });
+            if(deleted > 0) {
+                log.info("Removed {} orphan tweak rows above the indexed-block marker (interrupted shutdown recovery)", deleted);
+            }
+        } catch(Exception e) {
+            log.error("Error repairing orphan tweak rows", e);
+        }
+    }
+
     public int getLastBlockIndexed() {
         try {
             return dbManager.executeRead(connection -> {
-                try(PreparedStatement statement = connection.prepareStatement("SELECT MAX(height) from " + TWEAK_TABLE)) {
+                try(PreparedStatement statement = connection.prepareStatement("SELECT height FROM " + INDEXED_BLOCK_TABLE)) {
                     ResultSet resultSet = statement.executeQuery();
                     return resultSet.next() ? Math.max(lastBlockIndexed.get(), resultSet.getInt(1)) : lastBlockIndexed.get();
                 }
@@ -157,7 +204,25 @@ public class Index {
         }
     }
 
-    public void addToIndex(Map<BlockTransaction, byte[]> transactions) {
+    public byte[] getLastBlockHash() {
+        try {
+            return dbManager.executeRead(connection -> {
+                try(PreparedStatement statement = connection.prepareStatement("SELECT block_hash FROM " + INDEXED_BLOCK_TABLE)) {
+                    ResultSet resultSet = statement.executeQuery();
+                    if(!resultSet.next()) {
+                        return null;
+                    }
+                    byte[] hash = resultSet.getBytes(1);
+                    return (hash == null || hash.length == 0) ? null : hash;
+                }
+            });
+        } catch(Exception e) {
+            log.error("Error getting last block hash", e);
+            return null;
+        }
+    }
+
+    public void addToIndex(int height, byte[] blockHash, Map<BlockTransaction, byte[]> transactions) {
         if(dbManager.isShutdown()) {
             return;
         }
@@ -165,47 +230,60 @@ public class Index {
         int fromBlockHeight = lastBlockIndexed.get();
         try {
             int newLastBlockIndexed = dbManager.executeWrite(connection -> {
-                DuckDBConnection duckDBConnection = (DuckDBConnection)connection;
-                try(DuckDBAppender appender = duckDBConnection.createAppender(DuckDBConnection.DEFAULT_SCHEMA, TWEAK_TABLE)) {
-                    int blockHeight = -1;
+                if(!transactions.isEmpty()) {
+                    DuckDBConnection duckDBConnection = (DuckDBConnection)connection;
+                    try(DuckDBAppender appender = duckDBConnection.createAppender(DuckDBConnection.DEFAULT_SCHEMA, TWEAK_TABLE)) {
+                        int blockHeight = -1;
 
-                    for(BlockTransaction blkTx : transactions.keySet()) {
-                        appender.beginRow();
-                        appender.append(blkTx.getTransaction().getTxId().getBytes());
-                        appender.append(blkTx.getHeight());
-                        appender.append(transactions.get(blkTx));
+                        for(BlockTransaction blkTx : transactions.keySet()) {
+                            appender.beginRow();
+                            appender.append(blkTx.getTransaction().getTxId().getBytes());
+                            appender.append(blkTx.getHeight());
+                            appender.append(transactions.get(blkTx));
 
-                        List<Long> hashPrefixes = new ArrayList<>();
-                        if(auditScanKey != null) {
-                            long hashPrefix = getAuditHashPrefix(transactions, blkTx);
-                            hashPrefixes.add(hashPrefix);
-                        } else {
-                            List<TransactionOutput> outputs = blkTx.getTransaction().getOutputs();
-                            for(TransactionOutput output : outputs) {
-                                if(ScriptType.P2TR.isScriptType(output.getScript())) {
-                                    long hashPrefix = getHashPrefix(ScriptType.P2TR.getPublicKeyFromScript(output.getScript()).getPubKey(), 1);
-                                    hashPrefixes.add(hashPrefix);
+                            List<Long> hashPrefixes = new ArrayList<>();
+                            if(auditScanKey != null) {
+                                long hashPrefix = getAuditHashPrefix(transactions, blkTx);
+                                hashPrefixes.add(hashPrefix);
+                            } else {
+                                List<TransactionOutput> outputs = blkTx.getTransaction().getOutputs();
+                                for(TransactionOutput output : outputs) {
+                                    if(ScriptType.P2TR.isScriptType(output.getScript())) {
+                                        long hashPrefix = getHashPrefix(ScriptType.P2TR.getPublicKeyFromScript(output.getScript()).getPubKey(), 1);
+                                        hashPrefixes.add(hashPrefix);
+                                    }
                                 }
                             }
+                            appender.append(hashPrefixes.stream().mapToLong(Long::longValue).toArray());
+                            appender.endRow();
+
+                            blockHeight = Math.max(blockHeight, blkTx.getHeight());
                         }
-                        appender.append(hashPrefixes.stream().mapToLong(Long::longValue).toArray());
-                        appender.endRow();
 
-                        blockHeight = Math.max(blockHeight, blkTx.getHeight());
+                        if(blockHeight <= 0 && lastBlockIndexed.get() < 0) {
+                            log.info("Indexed " + transactions.size() + " mempool transactions");
+                        } else if(blockHeight > 0) {
+                            log.debug("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
+                        }
                     }
-
-                    if(blockHeight <= 0 && lastBlockIndexed.get() < 0) {
-                        log.info("Indexed " + transactions.size() + " mempool transactions");
-                    } else if(blockHeight > 0) {
-                        log.debug("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
-                    }
-
-                    return blockHeight;
                 }
+
+                if(height > 0 && blockHash != null) {
+                    try(PreparedStatement ps = connection.prepareStatement("INSERT INTO " + INDEXED_BLOCK_TABLE + " (height, block_hash) VALUES (?, ?) " +
+                            "ON CONFLICT (singleton) DO UPDATE SET height = excluded.height, block_hash = excluded.block_hash")) {
+                        ps.setInt(1, height);
+                        ps.setBytes(2, blockHash);
+                        ps.executeUpdate();
+                    }
+                }
+
+                return height;
             });
             lastBlockIndexed.set(newLastBlockIndexed);
 
-            if(newLastBlockIndexed <= 0) {
+            if(transactions.isEmpty()) {
+                //empty block: marker advanced, but nothing to notify on
+            } else if(newLastBlockIndexed <= 0) {
                 Frigate.getEventBus().post(new SilentPaymentsMempoolIndexAdded(transactions.keySet().stream().map(blkTx -> blkTx.getTransaction().getTxId()).collect(Collectors.toSet())));
             } else {
                 Frigate.getEventBus().post(new SilentPaymentsBlocksIndexUpdate(fromBlockHeight + 1, newLastBlockIndexed, transactions.size()));
@@ -234,9 +312,27 @@ public class Index {
 
         try {
             dbManager.executeWrite(connection -> {
-                try(PreparedStatement statement = connection.prepareStatement("DELETE FROM " + TWEAK_TABLE + " WHERE height >= ?")) {
-                    statement.setInt(1, startHeight);
-                    return statement.execute();
+                boolean prevAutoCommit = connection.getAutoCommit();
+                connection.setAutoCommit(false);
+                try {
+                    try(PreparedStatement deleteTweak = connection.prepareStatement("DELETE FROM " + TWEAK_TABLE + " WHERE height >= ?")) {
+                        deleteTweak.setInt(1, startHeight);
+                        deleteTweak.execute();
+                    }
+                    //hash applied to the original (higher) marker height — clear it so the startup hash check is a no-op until the first re-indexed block writes a real hash
+                    try(PreparedStatement updateMarker = connection.prepareStatement("INSERT INTO " + INDEXED_BLOCK_TABLE + " (height, block_hash) VALUES (?, ?) " +
+                            "ON CONFLICT (singleton) DO UPDATE SET height = excluded.height, block_hash = excluded.block_hash")) {
+                        updateMarker.setInt(1, Math.max(0, startHeight - 1));
+                        updateMarker.setBytes(2, new byte[0]);
+                        updateMarker.executeUpdate();
+                    }
+                    connection.commit();
+                    return true;
+                } catch(SQLException e) {
+                    connection.rollback();
+                    throw e;
+                } finally {
+                    connection.setAutoCommit(prevAutoCommit);
                 }
             });
             lastBlockIndexed.accumulateAndGet(startHeight - 1, Math::min);

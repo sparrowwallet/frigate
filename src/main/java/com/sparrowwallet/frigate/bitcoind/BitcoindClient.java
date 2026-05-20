@@ -163,6 +163,21 @@ public class BitcoindClient {
 
         lastBlock = blockchainInfo.bestblockhash();
         Frigate.getEventBus().post(tip);
+
+        blocksIndex.repairOrphanTweaks();
+
+        int markerHeight = blocksIndex.getLastBlockIndexed();
+        byte[] storedHash = blocksIndex.getLastBlockHash();
+        if(markerHeight > 0 && storedHash != null) {
+            String currentHashHex = getBitcoindService().getBlockHash(markerHeight);
+            byte[] currentHash = Sha256Hash.wrap(currentHashHex).getBytes();
+            if(!Arrays.equals(storedHash, currentHash)) {
+                int rollbackTo = Math.max(0, markerHeight - MAX_REORG_DEPTH);
+                log.info("Stored block hash at height {} does not match bitcoind - rolling back to height {} and re-indexing", markerHeight, rollbackTo);
+                blocksIndex.removeFromIndex(rollbackTo + 1);
+            }
+        }
+
         int startHeight = blocksIndex.getLastBlockIndexed() + 1;
         int endHeight = tip.height();
         int blocksToIndex = endHeight - startHeight + 1;
@@ -286,9 +301,7 @@ public class BitcoindClient {
             }
         }
 
-        if(!eligibleTransactions.isEmpty()) {
-            blocksIndex.addToIndex(eligibleTransactions);
-        }
+        blocksIndex.addToIndex(height, Sha256Hash.wrap(blockHash).getBytes(), eligibleTransactions);
     }
 
     private void indexBlockLegacy(int height, HexFormat hexFormat) {
@@ -322,9 +335,7 @@ public class BitcoindClient {
             }
         }
 
-        if(!eligibleTransactions.isEmpty()) {
-            blocksIndex.addToIndex(eligibleTransactions);
-        }
+        blocksIndex.addToIndex(height, Sha256Hash.wrap(blockHash).getBytes(), eligibleTransactions);
     }
 
     private synchronized void updateMempoolIndex() {
@@ -356,7 +367,7 @@ public class BitcoindClient {
                 mempoolIndex.removeFromIndex(removedTxids);
             }
             if(!eligibleTransactions.isEmpty()) {
-                mempoolIndex.addToIndex(eligibleTransactions);
+                mempoolIndex.addToIndex(0, null, eligibleTransactions);
             }
         } catch(RuntimeException e) {
             //nothing was committed to the index - drop the would-be-indexed txids so a later diff retries them
@@ -567,7 +578,7 @@ public class BitcoindClient {
 
                 //add before remove: if a txid somehow ended up in both batches (it shouldn't - see processSeqEvent), the net result is "absent", correct for an A-then-R
                 if(!eligibleTransactions.isEmpty()) {
-                    mempoolIndex.addToIndex(eligibleTransactions);
+                    mempoolIndex.addToIndex(0, null, eligibleTransactions);
                     eligibleTransactions.clear();
                 }
                 if(!removedTxids.isEmpty()) {
