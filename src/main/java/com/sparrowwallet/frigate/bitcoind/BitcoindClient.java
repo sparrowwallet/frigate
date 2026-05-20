@@ -158,8 +158,21 @@ public class BitcoindClient {
 
         lastBlock = blockchainInfo.bestblockhash();
         Frigate.getEventBus().post(tip);
-        log.info("Initializing indexes...");
+        int startHeight = blocksIndex.getLastBlockIndexed() + 1;
+        int endHeight = tip.height();
+        int blocksToIndex = endHeight - startHeight + 1;
+        if(blocksToIndex > 0) {
+            log.info("Indexing {} blocks ({} to {})...", blocksToIndex, startHeight, endHeight);
+        } else {
+            log.info("Block index is up to date");
+        }
+        long startTime = System.currentTimeMillis();
         updateBlocksIndex();
+        if(blocksToIndex > 0) {
+            long elapsedMs = System.currentTimeMillis() - startTime;
+            double blocksPerSec = blocksToIndex / (elapsedMs / 1000.0);
+            log.info("Indexed {} blocks in {}.{}s ({} blocks/sec)", blocksToIndex, elapsedMs / 1000, String.format(Locale.ROOT, "%03d", elapsedMs % 1000), String.format(Locale.ROOT, "%.1f", blocksPerSec));
+        }
         updateMempoolIndex();
         lastMempoolDiffMs = System.currentTimeMillis();
         Frigate.getEventBus().post(tip);
@@ -190,11 +203,24 @@ public class BitcoindClient {
     private synchronized void updateBlocksIndex() {
         HexFormat hexFormat = HexFormat.of();
 
-        for(int i = blocksIndex.getLastBlockIndexed() + 1; i <= tip.height(); i++) {
+        int startHeight = blocksIndex.getLastBlockIndexed() + 1;
+        int maxHeight = tip.height();
+        int totalBlocks = maxHeight - startHeight + 1;
+        long lastLogTime = System.currentTimeMillis();
+
+        for(int i = startHeight; i <= maxHeight; i++) {
             if(useGetBlockVerbose) {
                 indexBlockVerbose(i, hexFormat);
             } else {
                 indexBlockLegacy(i, hexFormat);
+            }
+
+            long now = System.currentTimeMillis();
+            if(now - lastLogTime >= 30_000) {
+                int blocksProcessed = i - startHeight + 1;
+                double percent = 100.0 * blocksProcessed / totalBlocks;
+                log.info("Indexing progress: {} / {} blocks ({}%, height {})", blocksProcessed, totalBlocks, String.format(Locale.ROOT, "%.1f", percent), i);
+                lastLogTime = now;
             }
         }
     }

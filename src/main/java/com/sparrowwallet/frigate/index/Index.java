@@ -197,7 +197,7 @@ public class Index {
                     if(blockHeight <= 0 && lastBlockIndexed.get() < 0) {
                         log.info("Indexed " + transactions.size() + " mempool transactions");
                     } else if(blockHeight > 0) {
-                        log.info("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
+                        log.debug("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
                     }
 
                     return blockHeight;
