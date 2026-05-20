@@ -9,6 +9,7 @@ connect = true
 # auth = "user:password"         # only needed for USERPASS
 # zmqSequenceEndpoint = "tcp://127.0.0.1:28336"   # bitcoind -zmqpubsequence endpoint for low-latency mempool ingestion
 # rpcRequestTimeoutSeconds = 60                   # per-RPC read timeout (raise on slow/remote bitcoind, lower on fast LAN)
+# rpcBatchSize = 100                              # max sub-requests per JSON-RPC array batch (mempool fill)
 
 [index]
 # startHeight = 0                # default: 709632 on mainnet (Taproot activation), 0 on testnet

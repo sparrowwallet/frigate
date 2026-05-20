@@ -232,6 +232,7 @@ public class Config {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class CoreConfig {
         public static final int DEFAULT_RPC_REQUEST_TIMEOUT_SECONDS = 60;
+        public static final int DEFAULT_RPC_BATCH_SIZE = 100;
 
         private Boolean connect;
         private String server;
@@ -240,6 +241,7 @@ public class Config {
         private String auth;
         private String zmqSequenceEndpoint;
         private Integer rpcRequestTimeoutSeconds;
+        private Integer rpcBatchSize;
 
         public Boolean getConnect() {
             return connect;
@@ -328,6 +330,19 @@ public class Config {
         public int getRpcRequestTimeoutMillis() {
             int seconds = rpcRequestTimeoutSeconds != null ? rpcRequestTimeoutSeconds : DEFAULT_RPC_REQUEST_TIMEOUT_SECONDS;
             return seconds * 1000;
+        }
+
+        public Integer getRpcBatchSize() {
+            return rpcBatchSize;
+        }
+
+        public void setRpcBatchSize(Integer rpcBatchSize) {
+            this.rpcBatchSize = rpcBatchSize;
+        }
+
+        @JsonIgnore
+        public int getRpcBatchSizeValue() {
+            return rpcBatchSize != null && rpcBatchSize > 0 ? rpcBatchSize : DEFAULT_RPC_BATCH_SIZE;
         }
     }
 

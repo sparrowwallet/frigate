@@ -1,6 +1,7 @@
 package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
+import com.github.arteam.simplejsonrpc.client.exception.JsonRpcBatchException;
 import com.github.arteam.simplejsonrpc.client.exception.JsonRpcException;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.drongo.OsType;
@@ -29,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -46,7 +48,9 @@ public class BitcoindClient {
     private static final long POLL_MEMPOOL_DIFF_INTERVAL_MS = 5_000;
     private static final long ZMQ_STALENESS_THRESHOLD_MS = 60_000;
 
+    private final BitcoindTransport bitcoindTransport;
     private final JsonRpcClient jsonRpcClient;
+    private final AtomicLong rpcIdCounter = new AtomicLong();
     private final Timer timer = new Timer(true);
     private final Index blocksIndex;
     private final Index mempoolIndex;
@@ -81,6 +85,7 @@ public class BitcoindClient {
     }
 
     BitcoindClient(Index blocksIndex, Index mempoolIndex, BitcoindTransport bitcoindTransport) {
+        this.bitcoindTransport = bitcoindTransport;
         this.jsonRpcClient = new JsonRpcClient(bitcoindTransport);
         this.blocksIndex = blocksIndex;
         this.mempoolIndex = mempoolIndex;
@@ -338,8 +343,13 @@ public class BitcoindClient {
         Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
 
         try {
+            Map<Sha256Hash, String> hexByTxid = fetchRawTxBatch(addedTxids);
             for(Sha256Hash addedTxid : addedTxids) {
-                ingestMempoolTx(addedTxid, spentScriptPubKeys, eligibleTransactions, hexFormat);
+                String txHex = hexByTxid.get(addedTxid);
+                if(txHex == null) {
+                    continue;
+                }
+                ingestMempoolTxFromHex(addedTxid, txHex, spentScriptPubKeys, eligibleTransactions, hexFormat);
             }
 
             if(!removedTxids.isEmpty()) {
@@ -357,19 +367,50 @@ public class BitcoindClient {
         mempoolTxIds.removeAll(removedTxids);
     }
 
-    /**
-     * Ingest a single mempool transaction: fetch it from bitcoind, cache its output scriptPubKeys, and if it has a taproot
-     * output, compute the silent payments tweak and add it to the supplied eligible transactions batch. Idempotent — gated on
-     * an atomic insert into {@link #mempoolTxIds}, so a txid already ingested (via ZMQ or the safety-net diff) is skipped.
-     */
+    @SuppressWarnings("unchecked")
+    private Map<Sha256Hash, String> fetchRawTxBatch(Collection<Sha256Hash> txids) {
+        if(txids.isEmpty()) {
+            return Map.of();
+        }
+        PagedBatchRequestBuilder<Sha256Hash, String> builder = PagedBatchRequestBuilder.create(bitcoindTransport, rpcIdCounter)
+                .keysType(Sha256Hash.class).returnType(String.class);
+        for(Sha256Hash txid : txids) {
+            builder.add(txid, "getrawtransaction", txid.toString(), false);
+        }
+        try {
+            return builder.execute();
+        } catch(JsonRpcBatchException e) {
+            return (Map<Sha256Hash, String>)e.getSuccesses();
+        } catch(Exception e) {
+            if(e instanceof RuntimeException re) {
+                throw re;
+            }
+            throw new RuntimeException("Error executing batched getrawtransaction request", e);
+        }
+    }
+
     private void ingestMempoolTx(Sha256Hash txid, Map<HashIndex, Script> spentScriptPubKeys, Map<BlockTransaction, byte[]> eligibleTransactions, HexFormat hexFormat) {
+        String txHex;
+        try {
+            txHex = (String)getBitcoindService().getRawTransaction(txid.toString(), false);
+        } catch(JsonRpcException e) {
+            //transaction removed from mempool before we could fetch it
+            return;
+        }
+
+        ingestMempoolTxFromHex(txid, txHex, spentScriptPubKeys, eligibleTransactions, hexFormat);
+    }
+
+    /**
+     * Ingest an already-fetched mempool transaction. Idempotent — gated on an atomic insert into {@link #mempoolTxIds},
+     * so a txid already ingested (via ZMQ or the safety-net diff) is skipped.
+     */
+    private void ingestMempoolTxFromHex(Sha256Hash txid, String txHex, Map<HashIndex, Script> spentScriptPubKeys, Map<BlockTransaction, byte[]> eligibleTransactions, HexFormat hexFormat) {
         if(!mempoolTxIds.add(txid)) {
             return;
         }
 
-        BitcoindClientService bitcoindService = getBitcoindService();
         try {
-            String txHex = (String)bitcoindService.getRawTransaction(txid.toString(), false);
             Transaction tx = new Transaction(hexFormat.parseHex(txHex));
             for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
                 byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
@@ -377,6 +418,7 @@ public class BitcoindClient {
             }
 
             if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
+                BitcoindClientService bitcoindService = getBitcoindService();
                 for(TransactionInput txInput : tx.getInputs()) {
                     HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
                     spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
@@ -388,8 +430,6 @@ public class BitcoindClient {
                     eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
                 }
             }
-        } catch(JsonRpcException e) {
-            //transaction removed from mempool before we could fetch it - leave it in mempoolTxIds
         } catch(RuntimeException e) {
             //transient failure - drop the txid so a later diff re-ingests it
             mempoolTxIds.remove(txid);
