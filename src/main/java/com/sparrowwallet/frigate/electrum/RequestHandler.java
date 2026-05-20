@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 public class RequestHandler implements Runnable, SubscriptionStatus, Thread.UncaughtExceptionHandler {
@@ -45,6 +46,10 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new ConcurrentHashMap<>();
     private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
 
+    private final ReentrantLock writeLock = new ReentrantLock();
+    private volatile PrintWriter out;
+    private final ElectrumNotificationService notificationService;
+
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
         this.clientSocket = clientSocket;
         Server backendServer = Config.get().getServer().getBackendElectrumServerObj();
@@ -57,6 +62,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             this.reader = null;
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
+        this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);
     }
 
     public void run() {
@@ -64,13 +70,13 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         this.connected = true;
 
         try {
-            connectBackendTransport();
-
-            InputStream input  = clientSocket.getInputStream();
+            InputStream input = clientSocket.getInputStream();
             BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
 
             OutputStream output = clientSocket.getOutputStream();
-            PrintWriter out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
+            this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
+
+            connectBackendTransport();
 
             while(true) {
                 postResponseTasks.clear();
@@ -87,8 +93,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
                 }
 
                 String response = rpcServer.handle(request, electrumServerService);
-                out.println(response);
-                out.flush();
+                writeLine(response);
 
                 runPostResponseTasks();
             }
@@ -105,6 +110,20 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             } catch(IOException e) {
                 log.error("Error closing client socket", e);
             }
+        }
+    }
+
+    public void writeLine(String line) {
+        writeLock.lock();
+        try {
+            PrintWriter writer = out;
+            if(writer == null) {
+                return;
+            }
+            writer.println(line);
+            writer.flush();
+        } finally {
+            writeLock.unlock();
         }
     }
 
@@ -211,18 +230,14 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     @Subscribe
     public void newBlock(ElectrumBlockHeader electrumBlockHeader) {
         if(isHeadersSubscribed()) {
-            ElectrumNotificationTransport electrumNotificationTransport = new ElectrumNotificationTransport(clientSocket);
-            JsonRpcClient jsonRpcClient = new JsonRpcClient(electrumNotificationTransport);
-            jsonRpcClient.onDemand(ElectrumNotificationService.class).notifyHeaders(electrumBlockHeader);
+            notificationService.notifyHeaders(electrumBlockHeader);
         }
     }
 
     @Subscribe
     public void scriptHashStatus(ScriptHashStatus scriptHashStatus) {
         if(isScriptHashSubscribed(scriptHashStatus.scriptHash())) {
-            ElectrumNotificationTransport electrumNotificationTransport = new ElectrumNotificationTransport(clientSocket);
-            JsonRpcClient jsonRpcClient = new JsonRpcClient(electrumNotificationTransport);
-            jsonRpcClient.onDemand(ElectrumNotificationService.class).notifyScriptHash(scriptHashStatus.scriptHash(), scriptHashStatus.status());
+            notificationService.notifyScriptHash(scriptHashStatus.scriptHash(), scriptHashStatus.status());
         }
     }
 
@@ -239,17 +254,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             List<SilentPaymentsTxEntry> deliverable = notification.history().stream()
                     .filter(txEntry -> txEntry.height <= 0 || !subscription.getMempoolTxids().contains(Sha256Hash.wrap(txEntry.tx_hash))).toList();
 
-            try {
-                ElectrumNotificationTransport electrumNotificationTransport = new ElectrumNotificationTransport(clientSocket);
-                JsonRpcClient jsonRpcClient = new JsonRpcClient(electrumNotificationTransport);
-                jsonRpcClient.onDemand(ElectrumNotificationService.class).notifySilentPayments(notification.subscription(), notification.progress(), deliverable);
-            } catch(IllegalStateException e) {
-                if(e.getCause() instanceof java.io.IOException) {
-                    log.debug("Client disconnected before notification could be sent");
-                } else {
-                    throw e;
-                }
-            }
+            notificationService.notifySilentPayments(notification.subscription(), notification.progress(), deliverable);
         }
     }
 
