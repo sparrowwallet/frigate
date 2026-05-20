@@ -54,6 +54,9 @@ public interface BitcoindClientService {
     @JsonRpcMethod("getblock")
     Object getBlock(@JsonRpcParam("blockhash") String blockhash, @JsonRpcOptional @JsonRpcParam("verbosity") int verbosity);
 
+    @JsonRpcMethod("getblock")
+    VerboseBlock getVerboseBlock(@JsonRpcParam("blockhash") String blockhash, @JsonRpcParam("verbosity") int verbosity);
+
     @JsonRpcMethod("getrawtransaction")
     Object getRawTransaction(@JsonRpcParam("txid") String txid, @JsonRpcParam("verbose") boolean verbose);
 

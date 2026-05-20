@@ -2,6 +2,7 @@ package com.sparrowwallet.frigate.bitcoind;
 
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.sparrowwallet.drongo.Network;
+import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Server;
 import com.sparrowwallet.frigate.io.SslUtil;
 import org.slf4j.Logger;
@@ -19,6 +20,8 @@ import java.util.Base64;
 public class BitcoindTransport implements Transport {
     private static final Logger log = LoggerFactory.getLogger(BitcoindTransport.class);
     public static final String COOKIE_FILENAME = ".cookie";
+
+    private static final int CONNECT_TIMEOUT_MS = 10_000;
 
     private final Server bitcoindServer;
     private URL bitcoindUrl;
@@ -59,6 +62,9 @@ public class BitcoindTransport implements Transport {
                 httpsURLConnection.setSSLSocketFactory(sslSocketFactory);
             }
         }
+
+        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        connection.setReadTimeout(Config.get().getCore().getRpcRequestTimeoutMillis());
 
         connection.setRequestMethod("POST");
         connection.setRequestProperty("Content-Type", "application/json");

@@ -231,12 +231,15 @@ public class Config {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class CoreConfig {
+        public static final int DEFAULT_RPC_REQUEST_TIMEOUT_SECONDS = 60;
+
         private Boolean connect;
         private String server;
         private String authType;
         private String dataDir;
         private String auth;
         private String zmqSequenceEndpoint;
+        private Integer rpcRequestTimeoutSeconds;
 
         public Boolean getConnect() {
             return connect;
@@ -311,6 +314,20 @@ public class Config {
 
         public void setZmqSequenceEndpoint(String zmqSequenceEndpoint) {
             this.zmqSequenceEndpoint = zmqSequenceEndpoint;
+        }
+
+        public Integer getRpcRequestTimeoutSeconds() {
+            return rpcRequestTimeoutSeconds;
+        }
+
+        public void setRpcRequestTimeoutSeconds(Integer rpcRequestTimeoutSeconds) {
+            this.rpcRequestTimeoutSeconds = rpcRequestTimeoutSeconds;
+        }
+
+        @JsonIgnore
+        public int getRpcRequestTimeoutMillis() {
+            int seconds = rpcRequestTimeoutSeconds != null ? rpcRequestTimeoutSeconds : DEFAULT_RPC_REQUEST_TIMEOUT_SECONDS;
+            return seconds * 1000;
         }
     }
 

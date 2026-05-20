@@ -37,6 +37,7 @@ public class BitcoindClient {
     private static final Logger log = LoggerFactory.getLogger(BitcoindClient.class);
 
     private static final int MAX_REORG_DEPTH = 10;
+    private static final int MIN_GETBLOCK_VERBOSE_VERSION = 250000;
     public static final int MIN_SUBMIT_PACKAGE_VERSION = 280000;
 
     private static final int FLUSH_BATCH_SIZE = 50;
@@ -53,6 +54,7 @@ public class BitcoindClient {
     private NetworkInfo networkInfo;
     private String lastBlock;
     private volatile ElectrumBlockHeader tip;
+    private volatile boolean useGetBlockVerbose;
 
     private Exception lastPollException;
 
@@ -75,10 +77,20 @@ public class BitcoindClient {
     private final RecentBlocksMap recentBlocksMap = new RecentBlocksMap(MAX_REORG_DEPTH);
 
     public BitcoindClient(Index blocksIndex, Index mempoolIndex) {
-        BitcoindTransport bitcoindTransport;
+        this(blocksIndex, mempoolIndex, buildDefaultTransport());
+    }
 
-        Config config = Config.get();
-        Config.CoreConfig coreConfig = config.getCore();
+    BitcoindClient(Index blocksIndex, Index mempoolIndex, BitcoindTransport bitcoindTransport) {
+        this.jsonRpcClient = new JsonRpcClient(bitcoindTransport);
+        this.blocksIndex = blocksIndex;
+        this.mempoolIndex = mempoolIndex;
+
+        int cacheSize = Config.get().getIndex().getCacheSizeEntries();
+        this.scriptPubKeyCache = Collections.synchronizedMap(lruCache(cacheSize));
+    }
+
+    private static BitcoindTransport buildDefaultTransport() {
+        Config.CoreConfig coreConfig = Config.get().getCore();
 
         Server coreServer = coreConfig.getServerObj();
         if(coreServer == null) {
@@ -101,23 +113,21 @@ public class BitcoindClient {
         }
 
         if(coreAuthType == CoreAuthType.COOKIE || coreAuth.length() < 2) {
-            bitcoindTransport = new BitcoindTransport(coreServer, coreDataDir);
-        } else {
-            bitcoindTransport = new BitcoindTransport(coreServer, coreAuth);
+            return new BitcoindTransport(coreServer, coreDataDir);
         }
 
-        this.jsonRpcClient = new JsonRpcClient(bitcoindTransport);
-        this.blocksIndex = blocksIndex;
-        this.mempoolIndex = mempoolIndex;
-
-        int cacheSize = config.getIndex().getCacheSizeEntries();
-        this.scriptPubKeyCache = Collections.synchronizedMap(lruCache(cacheSize));
+        return new BitcoindTransport(coreServer, coreAuth);
     }
 
     public void initialize() {
         networkInfo = getBitcoindService().getNetworkInfo();
 
         BlockchainInfo blockchainInfo = getBitcoindService().getBlockchainInfo();
+        useGetBlockVerbose = networkInfo.version() >= MIN_GETBLOCK_VERBOSE_VERSION && !blockchainInfo.pruned();
+        if(useGetBlockVerbose) {
+            log.debug("Using getblock verbosity=3 (Bitcoin Core {})", networkInfo.version());
+        }
+
         VerboseBlockHeader blockHeader = getBitcoindService().getBlockHeader(blockchainInfo.bestblockhash());
         tip = blockHeader.getBlockHeader();
         timer.schedule(new PollTask(), 5000, 5000);
@@ -178,42 +188,111 @@ public class BitcoindClient {
     }
 
     private synchronized void updateBlocksIndex() {
-        BitcoindClientService bitcoindService = getBitcoindService();
         HexFormat hexFormat = HexFormat.of();
 
         for(int i = blocksIndex.getLastBlockIndexed() + 1; i <= tip.height(); i++) {
-            String blockHash = getBitcoindService().getBlockHash(i);
-            if(i > tip.height() - MAX_REORG_DEPTH) {
-                recentBlocksMap.put(i, blockHash);
+            if(useGetBlockVerbose) {
+                indexBlockVerbose(i, hexFormat);
+            } else {
+                indexBlockLegacy(i, hexFormat);
             }
-            String blockHex = (String)bitcoindService.getBlock(blockHash, 0);
-            Block block = new Block(hexFormat.parseHex(blockHex));
+        }
+    }
 
-            Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+    private void indexBlockVerbose(int height, HexFormat hexFormat) {
+        BitcoindClientService bitcoindService = getBitcoindService();
+        String blockHash = bitcoindService.getBlockHash(height);
+        if(height > tip.height() - MAX_REORG_DEPTH) {
+            recentBlocksMap.put(height, blockHash);
+        }
+
+        VerboseBlock vb = bitcoindService.getVerboseBlock(blockHash, 3);
+
+        Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+        for(VerboseBlock.VerboseTransaction vtx : vb.tx()) {
+            //fast path: populate the scriptPubKey cache and check the taproot-output gate directly from the JSON
+            Sha256Hash txid = Sha256Hash.wrap(vtx.txid());
+            boolean hasTaprootOutput = false;
+            for(VerboseBlock.VerboseVout vout : vtx.vout()) {
+                byte[] spkBytes = hexFormat.parseHex(vout.scriptPubKey().hex());
+                addtoScriptPubKeyCache(txid, vout.n(), spkBytes);
+                if(isP2tr(spkBytes)) {
+                    hasTaprootOutput = true;
+                }
+            }
+            boolean isCoinbase = !vtx.vin().isEmpty() && vtx.vin().getFirst().isCoinbase();
+            if(isCoinbase || !hasTaprootOutput) {
+                continue;
+            }
+
+            //eligible: parse the hex now so getInputPubKeys has witness / scriptSig data (not carried in v3 JSON)
+            Transaction tx = new Transaction(hexFormat.parseHex(vtx.hex()));
             Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
-            for(Transaction tx : block.getTransactions()) {
-                for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
-                    byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
-                    addtoScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
+            boolean missingPrevout = false;
+            for(int k = 0; k < vtx.vin().size(); k++) {
+                VerboseBlock.VerboseVin vin = vtx.vin().get(k);
+                if(vin.prevout() == null || vin.prevout().scriptPubKey() == null || vin.prevout().scriptPubKey().hex() == null) {
+                    missingPrevout = true;
+                    break;
                 }
-
-                if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
-                    for(TransactionInput txInput : tx.getInputs()) {
-                        HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
-                        spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
-                    }
-
-                    byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
-                    if(tweak != null) {
-                        BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), i, block.getBlockHeader().getTimeAsDate(), 0L, tx, block.getHash());
-                        eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
-                    }
-                }
+                TransactionInput in = tx.getInputs().get(k);
+                HashIndex hi = new HashIndex(in.getOutpoint().getHash(), in.getOutpoint().getIndex());
+                byte[] spkBytes = hexFormat.parseHex(vin.prevout().scriptPubKey().hex());
+                spentScriptPubKeys.put(hi, new Script(spkBytes));
+                addtoScriptPubKeyCache(hi.getHash(), (int)hi.getIndex(), spkBytes);
             }
 
-            if(!eligibleTransactions.isEmpty()) {
-                blocksIndex.addToIndex(eligibleTransactions);
+            if(missingPrevout) {
+                log.warn("getblock verbosity=3 returned no prevout for an input at height {} - falling back to legacy per-input fetch for this block", height);
+                indexBlockLegacy(height, hexFormat);
+                return;
             }
+
+            byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
+            if(tweak != null) {
+                BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), height, new Date(vb.time() * 1000L), 0L, tx, Sha256Hash.wrap(vb.hash()));
+                eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
+            }
+        }
+
+        if(!eligibleTransactions.isEmpty()) {
+            blocksIndex.addToIndex(eligibleTransactions);
+        }
+    }
+
+    private void indexBlockLegacy(int height, HexFormat hexFormat) {
+        BitcoindClientService bitcoindService = getBitcoindService();
+        String blockHash = bitcoindService.getBlockHash(height);
+        if(height > tip.height() - MAX_REORG_DEPTH) {
+            recentBlocksMap.put(height, blockHash);
+        }
+        String blockHex = (String)bitcoindService.getBlock(blockHash, 0);
+        Block block = new Block(hexFormat.parseHex(blockHex));
+
+        Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
+        Map<HashIndex, Script> spentScriptPubKeys = new HashMap<>();
+        for(Transaction tx : block.getTransactions()) {
+            for(int outputIndex = 0; outputIndex < tx.getOutputs().size(); outputIndex++) {
+                byte[] scriptPubKeyBytes = tx.getOutputs().get(outputIndex).getScriptBytes();
+                addtoScriptPubKeyCache(tx.getTxId(), outputIndex, scriptPubKeyBytes);
+            }
+
+            if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
+                for(TransactionInput txInput : tx.getInputs()) {
+                    HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
+                    spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
+                }
+
+                byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
+                if(tweak != null) {
+                    BlockTransaction blkTx = new BlockTransaction(tx.getTxId(), height, block.getBlockHeader().getTimeAsDate(), 0L, tx, block.getHash());
+                    eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
+                }
+            }
+        }
+
+        if(!eligibleTransactions.isEmpty()) {
+            blocksIndex.addToIndex(eligibleTransactions);
         }
     }
 
@@ -689,13 +768,18 @@ public class BitcoindClient {
         }
 
         // P2TR: 34 bytes - OP_1 <32-byte taproot output>
-        if(length == 34 &&
-                scriptPubKey[0] == (byte) 0x51 &&  // OP_1
-                scriptPubKey[1] == (byte) 0x20) {  // Push 32 bytes
+        if(isP2tr(scriptPubKey)) {
             return ScriptType.P2TR;
         }
 
         return null;
+    }
+
+    private static boolean isP2tr(byte[] scriptPubKey) {
+        return scriptPubKey != null
+                && scriptPubKey.length == 34
+                && scriptPubKey[0] == (byte) 0x51   // OP_1
+                && scriptPubKey[1] == (byte) 0x20;  // Push 32 bytes
     }
 
     private static File getDefaultCoreDataDir() {
