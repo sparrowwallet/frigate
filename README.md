@@ -48,6 +48,8 @@ connect = true
 # dataDir = "/home/bitcoin/.bitcoin"
 # auth = "user:password"         # only needed for USERPASS
 # zmqSequenceEndpoint = "tcp://127.0.0.1:28336"   # bitcoind -zmqpubsequence endpoint for low-latency mempool ingestion
+# rpcRequestTimeoutSeconds = 60                   # per-RPC read timeout (raise on slow/remote bitcoind, lower on fast LAN)
+# rpcBatchSize = 100                              # max sub-requests per JSON-RPC array batch (mempool fill)
 
 [index]
 # startHeight = 0                # default: 709632 on mainnet (Taproot activation), 0 on testnet
@@ -85,6 +87,10 @@ Verify support with `bitcoin-cli getzmqnotifications` — a `-32601 Method not f
 
 **Configuring `zmqSequenceEndpoint` is strongly recommended whenever `backendElectrumServer` is configured.**
 Without this configured, the backend may notify the client of a new transaction via scripthash before Frigate's silent payments notification lands — causing wallets to briefly display incorrect amounts.
+
+The `rpcRequestTimeoutSeconds` setting controls the per-RPC read timeout against Bitcoin Core (default: 60).
+Raise it for a slow or remote node if you see read timeouts in the log; the default is fine for a co-located Bitcoin Core.
+The `rpcBatchSize` setting caps the number of sub-requests per JSON-RPC array batch used during initial mempool indexing (default: 100); the default suits most deployments.
 
 ### Index
 
