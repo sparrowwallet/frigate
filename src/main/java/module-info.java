@@ -12,6 +12,8 @@ module com.sparrowwallet.frigate {
     requires org.jcommander;
     requires org.zeromq.jeromq;
     requires org.slf4j;
+    requires ch.qos.logback.core;
+    requires ch.qos.logback.classic;
     requires java.sql;
     requires static java.desktop;
     exports com.sparrowwallet.frigate;

@@ -35,6 +35,9 @@ dependencies {
     implementation('org.jcommander:jcommander:3.0')
     implementation('org.zeromq:jeromq:0.6.0')
     implementation ('org.slf4j:slf4j-api:2.0.17')
+    implementation ('ch.qos.logback:logback-classic:1.5.32') {
+        exclude group: 'org.slf4j'
+    }
     testImplementation platform('org.junit:junit-bom:5.14.1')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

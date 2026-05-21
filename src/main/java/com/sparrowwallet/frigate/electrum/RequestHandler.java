@@ -98,7 +98,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
                 runPostResponseTasks();
             }
         } catch(IOException e) {
-            log.error("Could not communicate with client socket", e);
+            log.debug("Could not communicate with client socket: {}", e.getMessage());
         } finally {
             closeBackendTransport();
             this.connected = false;
