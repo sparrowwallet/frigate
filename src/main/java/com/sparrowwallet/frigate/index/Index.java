@@ -47,6 +47,7 @@ public class Index {
     private final int batchSize;
     private final ECKey auditScanKey;
     private final ECKey auditSpendKey;
+    private volatile boolean steadyState = false;
 
     public Index(int startHeight, boolean inMemory, int batchSize) {
         lastBlockIndexed.accumulateAndGet(startHeight - 1, Math::max);
@@ -171,6 +172,10 @@ public class Index {
         dbManager.close();
     }
 
+    public void setSteadyState(boolean steadyState) {
+        this.steadyState = steadyState;
+    }
+
     public void repairOrphanTweaks() {
         if(dbManager.isShutdown()) {
             return;
@@ -263,7 +268,12 @@ public class Index {
                         if(blockHeight <= 0 && lastBlockIndexed.get() < 0) {
                             log.info("Indexed " + transactions.size() + " mempool transactions");
                         } else if(blockHeight > 0) {
-                            log.debug("Indexed " + transactions.size() + " transactions to block height " + blockHeight);
+                            String msg = "Indexed " + transactions.size() + " transactions to block height " + blockHeight;
+                            if(steadyState) {
+                                log.info(msg);
+                            } else {
+                                log.debug(msg);
+                            }
                         }
                     }
                 }

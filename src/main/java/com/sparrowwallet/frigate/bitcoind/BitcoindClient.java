@@ -193,6 +193,7 @@ public class BitcoindClient {
             double blocksPerSec = blocksToIndex / (elapsedMs / 1000.0);
             log.info("Indexed {} blocks in {}.{}s ({} blocks/sec)", blocksToIndex, elapsedMs / 1000, String.format(Locale.ROOT, "%03d", elapsedMs % 1000), String.format(Locale.ROOT, "%.1f", blocksPerSec));
         }
+        blocksIndex.setSteadyState(true);
         updateMempoolIndex();
         lastMempoolDiffMs = System.currentTimeMillis();
         Frigate.getEventBus().post(tip);
