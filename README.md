@@ -553,7 +553,7 @@ blockchain.silentpayments.subscribe(scan_private_key, spend_public_key, start, l
 
 - _scan_private_key_: A 64 character string containing the hex of the scan private key.
 - _spend_public_key_: A 66 character string containing the hex of the spend public key.
-- _start_: (Optional) An integer block height to start scanning from, or a string of the form `"FROM-TO"` to specify a closed range of heights. Integer values above 500,000,000 are treated as seconds from the start of the epoch.
+- _start_: (Optional) An integer block height to start scanning from, or a string of the form `"FROM-TO"` to specify a closed range of heights. Integer values above 500,000,000 are treated as seconds from the start of the epoch, matching `nLockTime` convention.
 - _labels_: (Optional) An array of positive integers specifying additional silent payment labels to scan for. Change (`m = 0`) is always included regardless. To aid in wallet recovery, this parameter should only be used for specialized applications.
 
 **Result**
@@ -585,16 +585,15 @@ Servers **must** send the response to `blockchain.silentpayments.subscribe` befo
 The `subscription` object in every notification **must** be byte-identical to the one returned in the original `blockchain.silentpayments.subscribe` response with the same `address`, `labels` and `start_height`.
 It identifies which subscription the notification belongs to, not the range that the server happened to scan to produce it.
 All historical (`progress` < `1.0`) results **must** be sent before current (up to date) results.
-Servers **must** also deliver silent payments notifications before any scripthash notification arising from the same block or mempool event, since the silent payments subscription is the discovery channel through which clients learn which scripthashes to subscribe to.
 A `progress` of `1.0` indicates the scan is up to date as of this notification.
 The first such notification marks the end of the historical scan; subsequent `1.0` notifications represent live updates as new blocks and mempool transactions are scanned.
-Clients should flush any buffered history on every `1.0` notification.
+Clients should flush any buffered history to local state on every `1.0` notification.
 
 ```
 blockchain.silentpayments.subscribe(subscription, progress, history)
 ```
 
-**Result**
+**Body**
 
 A dictionary with the following key/value pairs:
 
@@ -606,7 +605,7 @@ A dictionary with the following key/value pairs:
 2. A `progress` key/value pair indicating the progress of a historical scan:
 - _progress_: A floating point value between `0.0` and `1.0`. Will be `1.0` for all current (up to date) results.
 
-3. A `history` array of transactions. Confirmed transactions are listed in order by height. Each transaction is a dictionary with the following keys:
+3. A `history` array of transactions. Confirmed transactions are listed in order by height, followed by mempool transactions in arbitary order. Each transaction is a dictionary with the following keys:
 - _height_: The integer height of the block the transaction was confirmed in. For mempool transactions, `0` should be used.
 - _tx_hash_: The transaction hash in hexadecimal.
 - _tweak_key_: The tweak key (`input_hash*A`) for the transaction in compressed format.
@@ -642,13 +641,14 @@ A dictionary with the following key/value pairs:
 ```
 
 It is recommended that servers implementing this protocol send history results incrementally as the historical scan progresses.
-In addition, a maximum page size of 100 is suggested when sending historical transactions.
+In addition, a maximum page size of 1000 is suggested when sending historical transactions.
 This will avoid transmission issues with large wallets that have many transactions, while providing the client with regular progress updates.
 Servers should also emit a notification with empty `history` at regular intervals (e.g. every 5 seconds) during a historical scan, to keep the client updated on scanning progress.
 In the case of block reorgs, the server should rescan all existing subscriptions from the reorg-ed block height and send any history (if found) to the client.
 All found mempool transactions should be sent on the initial subscription, but thereafter previously sent mempool transactions should not be resent.
-The server **must not** re-notify a previously sent mempool transaction once it confirms as clients track confirmation state via `blockchain.scripthash.subscribe`.
+The server **must not** re-notify a previously sent mempool transaction once it confirms in a block - clients track confirmation state via `blockchain.scripthash.subscribe`.
 The silent payments subscription is purely a discovery channel.
+Once a silent payments subscription has reached `progress = 1.0`, servers **must** deliver silent payments notifications before any scripthash notification arising from the same block or mempool event, since the silent payments subscription is how clients learn which scripthashes to subscribe to.
 
 Clients reconnecting with prior history should pass `start = lastSeenHeight - reorgLimit` to limit the rescan to a recent window.
 A reorg limit of 100 blocks is sufficient.
