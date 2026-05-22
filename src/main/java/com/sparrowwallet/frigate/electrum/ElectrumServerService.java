@@ -29,12 +29,14 @@ public class ElectrumServerService {
     public static final Version MAX_DEFAULT_VERSION = new Version("1.4.2");
     public static final Version MAX_SUBMIT_PACKAGE_VERSION = new Version("1.6");
     public static final List<Integer> SILENT_PAYMENTS_SUPPORTED_VERSIONS = List.of(0);
+    private static final int METHOD_NOT_FOUND = -32601;
 
     private final BitcoindClient bitcoindClient;
     private final RequestHandler requestHandler;
     private final IndexQuerier indexQuerier;
     private final ElectrumBackendService electrumBackendService;
     private Version protocolVersion;
+    private String genesisHash;
 
     public ElectrumServerService(BitcoindClient bitcoindClient, RequestHandler requestHandler, IndexQuerier indexQuerier, ElectrumTransport backendTransport) {
         this.bitcoindClient = bitcoindClient;
@@ -104,17 +106,38 @@ public class ElectrumServerService {
     @JsonRpcMethod("server.features")
     public ServerFeatures getServerFeatures() {
         checkVersionNegotiated();
+        Config.ServerConfig serverConfig = Config.get().getServer();
+        Server tcpServer = serverConfig.getTcpServer();
+        Server sslServer = serverConfig.getSslServer();
+        Integer tcp = tcpServer != null ? tcpServer.getHostAndPort().getPort() : null;
+        Integer ssl = sslServer != null ? sslServer.getHostAndPort().getPort() : null;
+        Map<String, ServerFeatures.HostInfo> ourHosts = Map.of(serverConfig.getHost(), new ServerFeatures.HostInfo(tcp, ssl));
+
         if(electrumBackendService != null) {
-            Config.ServerConfig serverConfig = Config.get().getServer();
-            Server tcpServer = serverConfig.getTcpServer();
-            Server sslServer = serverConfig.getSslServer();
-            Integer tcp = tcpServer != null ? tcpServer.getHostAndPort().getPort() : null;
-            Integer ssl = sslServer != null ? sslServer.getHostAndPort().getPort() : null;
-            Map<String, ServerFeatures.HostInfo> ourHosts = Map.of(serverConfig.getHost(), new ServerFeatures.HostInfo(tcp, ssl));
-            return electrumBackendService.getServerFeatures().withHosts(ourHosts).withSilentPayments(SILENT_PAYMENTS_SUPPORTED_VERSIONS);
+            try {
+                return electrumBackendService.getServerFeatures().withHosts(ourHosts).withSilentPayments(SILENT_PAYMENTS_SUPPORTED_VERSIONS);
+            } catch(JsonRpcException e) {
+                if(e.getErrorMessage() == null || e.getErrorMessage().getCode() != METHOD_NOT_FOUND) {
+                    throw e;
+                }
+                log.debug("Backend does not support server.features, returning local response");
+            }
         }
 
-        throw new UnsupportedOperationException("Configure backendElectrumServer to use server.features");
+        return new ServerFeatures(ourHosts, getGenesisHash(), "sha256", Frigate.SERVER_NAME + " " + Frigate.SERVER_VERSION,
+                protocolVersion.get(), MIN_VERSION.get(), null, SILENT_PAYMENTS_SUPPORTED_VERSIONS);
+    }
+
+    private String getGenesisHash() {
+        if(genesisHash == null && bitcoindClient != null) {
+            try {
+                genesisHash = bitcoindClient.getBitcoindService().getBlockHash(0);
+            } catch(Exception e) {
+                log.debug("Could not fetch genesis hash from bitcoind", e);
+            }
+        }
+
+        return genesisHash;
     }
 
     @JsonRpcMethod("server.add_peer")
