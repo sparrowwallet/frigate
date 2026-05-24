@@ -24,7 +24,7 @@ connect = true
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
 
 [server]
-# host = "localhost"             # advertised in server.features (set to public hostname for public-facing deployments)
+# host = "ssl://xyz.com:50002"   # advertised in server.features; use array for multiple. Omit to advertise nothing.
 # tcp = "tcp://0.0.0.0:50001"    # plaintext listener bind URL; omit (or set to "") to disable. Default if neither tcp nor ssl is set.
 # ssl = "ssl://0.0.0.0:50002"    # SSL listener bind URL; omit to disable
 # sslCert = "cert.pem"           # PEM certificate (chain allowed); bare filename resolves under Frigate's home dir, or use an absolute path

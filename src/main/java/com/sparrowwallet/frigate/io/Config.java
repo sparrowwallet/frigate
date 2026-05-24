@@ -8,11 +8,13 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.toml.TomlMapper;
+import com.sparrowwallet.frigate.ConfigurationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.List;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -189,6 +191,7 @@ public class Config {
     public static synchronized Config get() {
         if(INSTANCE == null) {
             INSTANCE = load();
+            INSTANCE.getServer().getAdvertisedHosts();
         }
         return INSTANCE;
     }
@@ -452,19 +455,84 @@ public class Config {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ServerConfig {
-        private String host;
+        private List<String> host;
         private String tcp;
         private String ssl;
         private String sslCert;
         private String sslKey;
         private String backendElectrumServer;
 
-        public String getHost() {
-            return host != null ? host : "localhost";
+        @JsonIgnore
+        private List<Server> advertisedHostsCache;
+
+        public Object getHost() {
+            if(host == null || host.isEmpty()) {
+                return null;
+            }
+            return host.size() == 1 ? host.getFirst() : host;
         }
 
-        public void setHost(String host) {
-            this.host = host;
+        @JsonSetter("host")
+        public void setHost(JsonNode node) {
+            if(node == null || node.isNull()) {
+                this.host = null;
+                return;
+            }
+
+            List<String> entries = new ArrayList<>();
+            if(node.isTextual()) {
+                String value = node.asText();
+                if(!value.isEmpty()) {
+                    entries.add(value);
+                }
+            } else if(node.isArray()) {
+                for(JsonNode item : node) {
+                    if(!item.isTextual()) {
+                        throw new ConfigurationException("Each entry in 'host' under [server] must be a string (got: " + item + ")");
+                    }
+                    String value = item.asText();
+                    if(!value.isEmpty()) {
+                        entries.add(value);
+                    }
+                }
+            } else {
+                throw new ConfigurationException("'host' under [server] must be a string or array of strings (got: " + node + ")");
+            }
+
+            this.host = entries.isEmpty() ? null : entries;
+        }
+
+        @JsonIgnore
+        public List<Server> getAdvertisedHosts() {
+            if(advertisedHostsCache != null) {
+                return advertisedHostsCache;
+            }
+            if(host == null || host.isEmpty()) {
+                advertisedHostsCache = List.of();
+                return advertisedHostsCache;
+            }
+
+            List<Server> result = new ArrayList<>();
+            for(String entry : host) {
+                Protocol protocol = Protocol.getProtocol(entry);
+                if(protocol == null) {
+                    Server tcpBind = getTcpServer();
+                    if(tcpBind != null) {
+                        result.add(Server.fromString(Protocol.TCP.toUrlString(entry, tcpBind.getHostAndPort().getPort())));
+                    }
+                    Server sslBind = getSslServer();
+                    if(sslBind != null) {
+                        result.add(Server.fromString(Protocol.SSL.toUrlString(entry, sslBind.getHostAndPort().getPort())));
+                    }
+                } else if(protocol == Protocol.TCP || protocol == Protocol.SSL) {
+                    result.add(parseListener("host", entry, protocol));
+                } else {
+                    throw new ConfigurationException("Host advertisement '" + entry + "' under [server] must use tcp:// or ssl:// scheme");
+                }
+            }
+
+            advertisedHostsCache = List.copyOf(result);
+            return advertisedHostsCache;
         }
 
         public String getTcp() {
