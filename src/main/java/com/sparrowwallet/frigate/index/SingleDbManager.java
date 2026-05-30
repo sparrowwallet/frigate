@@ -31,6 +31,7 @@ public class SingleDbManager extends AbstractDbManager {
         this.inWriteMode = false;
     }
 
+    //Operations passed to executeRead must not await an operation that itself calls executeRead on another thread
     public <T> T executeRead(DbManager.ReadOperation<T> operation) throws SQLException, InterruptedException {
         if(shutdown) {
             throw new SQLException("Connection manager is shutting down");

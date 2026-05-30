@@ -404,13 +404,17 @@ public class Index {
                         })) {
                             queryProgressExecutor.scheduleAtFixedRate(() -> {
                                 try {
-                                    if(dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
+                                    if(queryProgressExecutor.isShutdown() || dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {
                                         statement.cancel();
                                         queryProgressExecutor.shutdownNow();
                                         return;
                                     }
 
                                     double progress = pollScanProgress(scanKeyBytes);
+
+                                    if(queryProgressExecutor.isShutdown()) {
+                                        return;
+                                    }
 
                                     List<SilentPaymentsTxEntry> history = new ArrayList<>();
                                     SilentPaymentsTxEntry entry;
@@ -428,7 +432,12 @@ public class Index {
                                 }
                             }, 5, 5, TimeUnit.SECONDS);
 
-                            drainResultSet(statement.executeQuery(), queue);
+                            try {
+                                drainResultSet(statement.executeQuery(), queue);
+                            } finally {
+                                //interrupt any parked progress poll - the implicit close() doesn't, which deadlocks against a queued writer
+                                queryProgressExecutor.shutdownNow();
+                            }
                         }
                     } else {
                         drainResultSet(statement.executeQuery(), queue);
