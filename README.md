@@ -62,6 +62,7 @@ connect = true
 # memoryLimit = "8GB"            # cap DuckDB memory usage (default: 80% of system RAM)
 # maxLabels = 10                 # maximum number of labels accepted per silent payments subscription
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
+# metricsEnabled = true          # hourly aggregate scan stats log line (default: true)
 
 [server]
 # host = "ssl://xyz.com:50002"   # advertised in server.features; use array for multiple. Omit to advertise nothing.
@@ -117,6 +118,9 @@ If scanning hangs or becomes unstable on certain GPUs (particularly older OpenCL
 The `maxLabels` setting caps the number of labels accepted per silent payments subscription (default: 10).
 The `maxSubscriptions` setting caps the number of silent payments subscriptions per connection (default: 100).
 Requests exceeding either limit are rejected with a JSON-RPC `-32602 Invalid params` error.
+
+When `metricsEnabled` is true (default), Frigate emits one `Aggregate SP scan stats` log line per hour summarising historical scan throughput across all scans in the window.
+The output is bucketed by result count and duration, rounded, and suppresses any bucket with fewer than ten samples, so no per-client scan information is exposed. Set to `false` to disable the line entirely.
 
 ### Server
 

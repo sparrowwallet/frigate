@@ -39,6 +39,7 @@ public class Frigate {
 
     private Index blocksIndex;
     private Index mempoolIndex;
+    private IndexQuerier indexQuerier;
     private BitcoindClient bitcoindClient;
     private ElectrumServerRunnable electrumServer;
 
@@ -73,7 +74,8 @@ public class Frigate {
         SSLContext sslContext = serverConfig.isSslEnabled() ? SslUtil.getServerSSLContext(serverConfig.getSslCertFile(), serverConfig.getSslKeyFile()) : null;
         InetSocketAddress tcpBind = toBindAddress(serverConfig.getTcpServer());
         InetSocketAddress sslBind = toBindAddress(serverConfig.getSslServer());
-        electrumServer = new ElectrumServerRunnable(bitcoindClient, new IndexQuerier(blocksIndex, mempoolIndex), tcpBind, sslBind, sslContext);
+        indexQuerier = new IndexQuerier(blocksIndex, mempoolIndex);
+        electrumServer = new ElectrumServerRunnable(bitcoindClient, indexQuerier, tcpBind, sslBind, sslContext);
         Thread electrumServerThread = new Thread(electrumServer, "Frigate Electrum Server");
         electrumServerThread.setDaemon(false);
         electrumServerThread.start();
@@ -99,6 +101,9 @@ public class Frigate {
         }
         if(electrumServer != null) {
             electrumServer.stop();
+        }
+        if(indexQuerier != null) {
+            indexQuerier.close();
         }
 
         running = false;

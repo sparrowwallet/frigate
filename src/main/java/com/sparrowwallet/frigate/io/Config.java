@@ -390,6 +390,7 @@ public class Config {
         private String memoryLimit;
         private Integer maxLabels;
         private Integer maxSubscriptions;
+        private Boolean metricsEnabled;
 
         public int getBatchSize() {
             return batchSize != null ? batchSize : DEFAULT_BATCH_SIZE;
@@ -449,6 +450,14 @@ public class Config {
 
         public void setMemoryLimit(String memoryLimit) {
             this.memoryLimit = memoryLimit;
+        }
+
+        public boolean isMetricsEnabled() {
+            return metricsEnabled == null || metricsEnabled;
+        }
+
+        public void setMetricsEnabled(Boolean metricsEnabled) {
+            this.metricsEnabled = metricsEnabled;
         }
     }
 
