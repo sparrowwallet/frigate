@@ -20,7 +20,7 @@ tasks.withType(AbstractArchiveTask).configureEach {
 
 dependencies {
     implementation(project(':drongo'))
-    implementation('org.duckdb:duckdb_jdbc:1.4.4.0')
+    implementation('org.duckdb:duckdb_jdbc:1.5.5.0')
     implementation('com.google.guava:guava:33.5.0-jre')
     implementation('com.google.code.gson:gson:2.13.2')
     implementation('com.github.arteam:simple-json-rpc-core:1.3')
