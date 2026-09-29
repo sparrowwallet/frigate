@@ -322,10 +322,48 @@ public class AsyncNotifierTest {
 
         //the request thread writes the subscribe response, then releases
         delivered.add("response");
-        notifier.releaseHeld();
+        notifier.release(SCRIPT_HASH_A);
 
         awaitDelivered(3);
         assertEquals(List.of(SCRIPT_HASH_B + ":" + STATUS_1, "response", SCRIPT_HASH_A + ":" + STATUS_2), delivered);
+    }
+
+    @Test
+    public void holdsAreCounted() throws InterruptedException {
+        createNotifier(10);
+        notifier.start();
+
+        //the request thread and the backend session both hold A
+        notifier.hold(SCRIPT_HASH_A);
+        notifier.hold(SCRIPT_HASH_A);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
+        notifier.release(SCRIPT_HASH_A);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
+        awaitDelivered(1);
+        assertEquals(List.of(SCRIPT_HASH_B + ":" + STATUS_1), delivered);
+
+        notifier.release(SCRIPT_HASH_A);
+        awaitDelivered(2);
+        assertEquals(List.of(SCRIPT_HASH_B + ":" + STATUS_1, SCRIPT_HASH_A + ":" + STATUS_1), delivered);
+
+        //releasing a scripthash that is not held has no effect
+        notifier.release(SCRIPT_HASH_A);
+        notifyStatus(SCRIPT_HASH_A, STATUS_2);
+        awaitDelivered(3);
+    }
+
+    @Test
+    public void olderStatusDoesNotReplaceNewerPending() throws InterruptedException {
+        createNotifier(10);
+        startWithStalledClient();
+
+        //a notification from the new connection (sequence 20) is queued before the catch-up status (sequence 19) of its resubscribe
+        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_2, 20);
+        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1, 19);
+        releaseWriter.countDown();
+
+        awaitDelivered(2);
+        assertEquals(List.of("stall", SCRIPT_HASH_A + ":" + STATUS_2), delivered);
     }
 
     @Test

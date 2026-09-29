@@ -5,11 +5,10 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.BiConsumer;
 
 /**
@@ -27,7 +26,9 @@ import java.util.function.BiConsumer;
  *
  * While a subscribe request for a scripthash is in progress, its statuses are held back until the response has been written
  * to the client (see hold()). Statuses read from the backend before the subscribe response are superseded by it and discarded;
- * those read after it are newer, and must reach the client after the response, not before.
+ * those read after it are newer, and must reach the client after the response, not before. The backend session also holds a
+ * scripthash while resubscribing it after a reconnect, for the same reason. Pending statuses are ordered by their backend read
+ * sequence: a status never replaces a pending one with a higher sequence.
  */
 public class AsyncNotifier {
     private static final Logger log = LoggerFactory.getLogger(AsyncNotifier.class);
@@ -42,7 +43,7 @@ public class AsyncNotifier {
 
     private final LinkedHashMap<String, PendingStatus> pendingStatus = new LinkedHashMap<>();
     private final ArrayDeque<Runnable> otherNotifications = new ArrayDeque<>();
-    private final Set<String> held = new HashSet<>();
+    private final Map<String, Integer> held = new HashMap<>();
     private boolean closed;
     private volatile boolean delivering;
     private Thread thread;
@@ -75,7 +76,10 @@ public class AsyncNotifier {
             if(closed) {
                 return;
             }
-            pendingStatus.put(scriptHash, new PendingStatus(status, sequence));
+            PendingStatus pending = pendingStatus.get(scriptHash);
+            if(pending == null || pending.sequence() < sequence) {
+                pendingStatus.put(scriptHash, new PendingStatus(status, sequence));
+            }
             overflowed = pendingStatus.size() > scriptHashSubscriptions.size() + queueSize;
             notifyAll();
         }
@@ -123,16 +127,23 @@ public class AsyncNotifier {
     }
 
     /**
-     * Holds back statuses for a scripthash whose subscribe request is in progress, until releaseHeld() is called once the
-     * response to the client request containing it has been written.
+     * Holds back statuses for a scripthash whose subscribe is in progress, until release() is called for it: by the request
+     * thread once the response to the client request containing the subscribe has been written, or by the backend session once
+     * its resubscribe has been recorded. Holds are counted, as both may hold the same scripthash at once.
      */
     public synchronized void hold(String scriptHash) {
-        held.add(scriptHash);
+        held.merge(scriptHash, 1, Integer::sum);
     }
 
-    public synchronized void releaseHeld() {
-        if(!held.isEmpty()) {
-            held.clear();
+    public synchronized void release(String scriptHash) {
+        Integer count = held.get(scriptHash);
+        if(count == null) {
+            return;
+        }
+        if(count > 1) {
+            held.put(scriptHash, count - 1);
+        } else {
+            held.remove(scriptHash);
             notifyAll();
         }
     }
@@ -234,7 +245,7 @@ public class AsyncNotifier {
             return !pendingStatus.isEmpty();
         }
         for(String scriptHash : pendingStatus.keySet()) {
-            if(!held.contains(scriptHash)) {
+            if(!held.containsKey(scriptHash)) {
                 return true;
             }
         }
@@ -242,8 +253,8 @@ public class AsyncNotifier {
     }
 
     /**
-     * Removes and returns the oldest pending status that is not held. Held scripthashes are few (those in one client request),
-     * so skipping past them is cheap.
+     * Removes and returns the oldest pending status that is not held. Held scripthashes are few (those in one client request,
+     * and the one being resubscribed), so skipping past them is cheap.
      */
     private Map.Entry<String, PendingStatus> pollDeliverableStatus() {
         if(held.isEmpty()) {
@@ -252,7 +263,7 @@ public class AsyncNotifier {
         Iterator<Map.Entry<String, PendingStatus>> iter = pendingStatus.entrySet().iterator();
         while(iter.hasNext()) {
             Map.Entry<String, PendingStatus> entry = iter.next();
-            if(!held.contains(entry.getKey())) {
+            if(!held.containsKey(entry.getKey())) {
                 iter.remove();
                 return entry;
             }

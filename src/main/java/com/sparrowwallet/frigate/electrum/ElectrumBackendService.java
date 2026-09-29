@@ -16,6 +16,9 @@ public interface ElectrumBackendService {
     @JsonRpcMethod("server.version")
     List<String> getServerVersion(@JsonRpcParam("client_name") String clientName, @JsonRpcParam("protocol_version") Object protocolVersion);
 
+    @JsonRpcMethod("server.ping")
+    Object ping();
+
     @JsonRpcMethod("server.features")
     ServerFeatures getServerFeatures();
 

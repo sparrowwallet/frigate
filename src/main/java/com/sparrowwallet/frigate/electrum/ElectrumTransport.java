@@ -69,6 +69,7 @@ public class ElectrumTransport implements Transport, Closeable {
 
     private volatile Connection connection;
     private volatile boolean closed;
+    private volatile long lastActivityNanos = System.nanoTime();
     private volatile Exception lastException;
 
     public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService) {
@@ -142,6 +143,7 @@ public class ElectrumTransport implements Transport, Closeable {
         //the response queue is not cleared: a pass() still waiting on the previous connection needs its connection-lost signal,
         //and messages left over from previous connections are skipped by pass() as they are tagged with their connection
         lastException = null;
+        lastActivityNanos = System.nanoTime();
         this.connection = newConnection;
 
         if(closed) {
@@ -154,6 +156,13 @@ public class ElectrumTransport implements Transport, Closeable {
     public boolean isConnected() {
         Connection current = connection;
         return current != null && current.open;
+    }
+
+    /**
+     * @return nanoseconds since a request was written or a message was read on the current connection, or since it was established
+     */
+    public long getIdleNanos() {
+        return System.nanoTime() - lastActivityNanos;
     }
 
     @Override
@@ -209,6 +218,7 @@ public class ElectrumTransport implements Transport, Closeable {
         ScheduledFuture<?> watchdog = requestTimeoutMillis > 0 ? WRITE_WATCHDOG.schedule(current::close, requestTimeoutMillis, TimeUnit.MILLISECONDS) : null;
         current.out.println(request);
         boolean failed = current.out.checkError();
+        lastActivityNanos = System.nanoTime();
         boolean timedOut = watchdog != null && !watchdog.cancel(false);
         if(failed || timedOut) {
             if(timedOut) {
@@ -236,6 +246,7 @@ public class ElectrumTransport implements Transport, Closeable {
                 if(received == null) {
                     throw new EOFException("Connection closed by Electrum server " + electrumServer);
                 }
+                lastActivityNanos = System.nanoTime();
                 log.debug("< " + received);
 
                 //the sequence is taken before checking the connection is still open: if it is, connect() has not yet replaced it,

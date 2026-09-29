@@ -22,6 +22,7 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
@@ -33,14 +34,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
-public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDispatcher.Subscriber, Thread.UncaughtExceptionHandler {
+public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDispatcher.Subscriber {
     private static final Logger log = LoggerFactory.getLogger(RequestHandler.class);
     private final Socket clientSocket;
     private final ElectrumServerService electrumServerService;
     private final JsonRpcServer rpcServer = new JsonRpcServer();
     private final AtomicBoolean disconnected = new AtomicBoolean(false);
-    private final ElectrumTransport backendTransport;
-    private volatile Thread reader;
+    private final BackendSession backendSession;
     private final HeadersDispatcher headersDispatcher;
 
     private boolean connected;
@@ -48,6 +48,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final ScriptHashSubscriptions scriptHashSubscriptions = new ScriptHashSubscriptions();
     private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new ConcurrentHashMap<>();
     private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
+    private final List<String> heldForResponse = new ArrayList<>();
     private final Object silentPaymentsNotificationLock = new Object();
 
     private final ReentrantLock writeLock = new ReentrantLock();
@@ -60,17 +61,24 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
         Config.ServerConfig serverConfig = Config.get().getServer();
         Server backendServer = serverConfig.getBackendElectrumServerObj();
+        ElectrumTransport backendTransport = null;
         if(backendServer != null) {
             long requestTimeoutMillis = TimeUnit.SECONDS.toMillis(serverConfig.getBackendRequestTimeoutSeconds());
-            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(),
+            backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(),
                     new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash), requestTimeoutMillis);
-        } else {
-            this.backendTransport = null;
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
         this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);
         this.notifier = new AsyncNotifier("ElectrumNotify-" + System.identityHashCode(this), AsyncNotifier.DEFAULT_QUEUE_SIZE, scriptHashSubscriptions,
                 notificationService::notifyScriptHash, this::disconnectSlowConsumer);
+        if(backendTransport != null) {
+            BackendSession.Settings settings = new BackendSession.Settings(BackendSession.INITIAL_BACKOFF_MILLIS,
+                    TimeUnit.SECONDS.toMillis(serverConfig.getBackendReconnectMaxBackoffSeconds()), TimeUnit.SECONDS.toMillis(serverConfig.getBackendPingIntervalSeconds()));
+            this.backendSession = new BackendSession("BackendSession-" + System.identityHashCode(this), backendTransport, scriptHashSubscriptions, notifier,
+                    electrumServerService::getBackendVersionRequest, settings);
+        } else {
+            this.backendSession = null;
+        }
     }
 
     public void run() {
@@ -85,7 +93,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             OutputStream output = clientSocket.getOutputStream();
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
 
-            connectBackendTransport();
+            startBackendSession();
 
             while(true) {
                 postResponseTasks.clear();
@@ -106,7 +114,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                     writeLine(response);
                 } finally {
                     //statuses held for subscribes in this request can follow the response now it has been written
-                    notifier.releaseHeld();
+                    heldForResponse.forEach(notifier::release);
+                    heldForResponse.clear();
                 }
 
                 runPostResponseTasks();
@@ -115,7 +124,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             log.debug("Could not communicate with client socket: {}", e.getMessage());
         } finally {
             notifier.close();
-            closeBackendTransport();
+            if(backendSession != null) {
+                backendSession.close();
+            }
             this.connected = false;
             this.disconnected.set(true);
             Frigate.getEventBus().unregister(this);
@@ -164,38 +175,19 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         }
     }
 
-    private void connectBackendTransport() {
-        if(backendTransport == null) {
+    /**
+     * Connects the session's backend connection, returning once the first attempt has completed. If it fails, proxied requests
+     * fail fast while the backend session keeps retrying in the background.
+     */
+    private void startBackendSession() {
+        if(backendSession == null) {
             return;
         }
 
         try {
-            backendTransport.connect();
-        } catch(IOException e) {
-            //proxied requests fail with BackendUnavailableException while the transport is not connected
-            log.error(e.getMessage());
-            return;
-        }
-
-        //each connection is read by its own thread, as a finished thread cannot be restarted
-        Thread newReader = Thread.ofVirtual().name("BackendServerReadThread-" + System.identityHashCode(this)).unstarted(this::readBackend);
-        newReader.setUncaughtExceptionHandler(this);
-        reader = newReader;
-        newReader.start();
-    }
-
-    private void closeBackendTransport() {
-        if(backendTransport != null) {
-            try {
-                backendTransport.close();
-            } catch(IOException e) {
-                log.error("Error closing transport", e);
-            }
-        }
-
-        Thread current = reader;
-        if(current != null && current.isAlive()) {
-            current.interrupt();
+            backendSession.start();
+        } catch(InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -219,10 +211,13 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     /**
      * Called before the backend subscribe request is sent. Statuses for the scripthash are held back from the client until the
      * response has been written, see AsyncNotifier.
+     * @return true if the subscription was added, false if the client was already subscribed
      */
-    public void subscribeScriptHash(String scriptHash) {
-        scriptHashSubscriptions.subscribe(scriptHash);
+    public boolean subscribeScriptHash(String scriptHash) {
+        boolean added = scriptHashSubscriptions.subscribe(scriptHash);
         notifier.hold(scriptHash);
+        heldForResponse.add(scriptHash);
+        return added;
     }
 
     /**
@@ -380,28 +375,6 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                 int scanFrom = subscription.getHighestBlockHeight() + 1;
                 electrumServerService.getIndexQuerier().startHistoryScan(subscription.getAddress(), scanFrom, null, subscription, new WeakReference<>(this), true);
             }
-        }
-    }
-
-    @Override
-    public void uncaughtException(Thread t, Throwable e) {
-        log.error("Uncaught exception in thread " + t.getName(), e);
-    }
-
-    /**
-     * Reads the backend connection until it ends. If it was lost (including being closed by a request timeout) rather than
-     * closed with the session, the client is disconnected: its subscriptions live on the lost connection, and a disconnected
-     * wallet reconnects and resubscribes, whereas one left connected would silently stop receiving notifications.
-     */
-    private void readBackend() {
-        backendTransport.readInputLoop();
-
-        if(!backendTransport.isClosed()) {
-            Exception cause = backendTransport.getLastException();
-            log.warn("Connection to backend Electrum server lost" + (cause == null ? "" : " (" + cause.getMessage() + ")") + ", disconnecting client " + clientSocket.getRemoteSocketAddress());
-            //abortive, as the notifier is still open and may start a write to a client that is not reading at any moment
-            //(isDelivering() is only reliable after the notifier is closed); unsent data does not matter when disconnecting
-            closeClientSocket(true);
         }
     }
 }

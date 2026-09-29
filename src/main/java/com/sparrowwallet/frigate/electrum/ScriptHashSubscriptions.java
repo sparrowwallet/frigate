@@ -1,5 +1,6 @@
 package com.sparrowwallet.frigate.electrum;
 
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -19,9 +20,10 @@ public class ScriptHashSubscriptions {
     /**
      * Adds a subscription before its backend request is sent, so a notification that races the response is not dropped.
      * An existing subscription keeps its recorded status.
+     * @return true if the subscription was added, false if it already existed
      */
-    public void subscribe(String scriptHash) {
-        statuses.putIfAbsent(scriptHash, PENDING);
+    public boolean subscribe(String scriptHash) {
+        return statuses.putIfAbsent(scriptHash, PENDING) == null;
     }
 
     /**
@@ -62,6 +64,13 @@ public class ScriptHashSubscriptions {
     public String getStatus(String scriptHash) {
         RecordedStatus recorded = statuses.get(scriptHash);
         return recorded == null ? null : recorded.status();
+    }
+
+    /**
+     * @return a snapshot of the subscribed scripthashes
+     */
+    public List<String> getScriptHashes() {
+        return List.copyOf(statuses.keySet());
     }
 
     public int size() {

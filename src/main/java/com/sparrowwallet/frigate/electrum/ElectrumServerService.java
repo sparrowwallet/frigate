@@ -37,6 +37,7 @@ public class ElectrumServerService {
     private final IndexQuerier indexQuerier;
     private final ElectrumBackendService electrumBackendService;
     private Version protocolVersion;
+    private volatile BackendSession.VersionRequest backendVersionRequest;
     private String genesisHash;
 
     public ElectrumServerService(BitcoindClient bitcoindClient, RequestHandler requestHandler, IndexQuerier indexQuerier, ElectrumTransport backendTransport) {
@@ -50,6 +51,13 @@ public class ElectrumServerService {
         } else {
             electrumBackendService = null;
         }
+    }
+
+    /**
+     * @return the server.version request last sent to the backend for this session, or null if the client has not negotiated
+     */
+    public BackendSession.VersionRequest getBackendVersionRequest() {
+        return backendVersionRequest;
     }
 
     public IndexQuerier getIndexQuerier() {
@@ -84,6 +92,8 @@ public class ElectrumServerService {
         Version backendVersion = clientVersion;
         if(electrumBackendService != null) {
             List<String> backendVersions = electrumBackendService.getServerVersion(clientName, protocolVersion);
+            //remembered so a reconnected backend connection can negotiate the same version before resubscribing
+            backendVersionRequest = new BackendSession.VersionRequest(clientName, protocolVersion);
             if(backendVersions != null && !backendVersions.isEmpty()) {
                 backendVersion = new Version(backendVersions.getLast());
             }
@@ -275,13 +285,17 @@ public class ElectrumServerService {
     public String subscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
-            requestHandler.subscribeScriptHash(scriptHash);
+            boolean added = requestHandler.subscribeScriptHash(scriptHash);
             try {
                 String status = electrumBackendService.subscribeScriptHash(scriptHash);
                 requestHandler.recordScriptHashSubscribeResponse(scriptHash, status, ElectrumTransport.getReadSequence());
                 return status;
             } catch(RuntimeException e) {
-                requestHandler.unsubscribeScriptHash(scriptHash);
+                //only roll back a subscription this request added: an existing one (for example during a backend outage, when
+                //the request fails fast) stays, and is restored with catch-up when the backend session reconnects
+                if(added) {
+                    requestHandler.unsubscribeScriptHash(scriptHash);
+                }
                 throw e;
             }
         }

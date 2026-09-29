@@ -32,7 +32,12 @@ public class FakeElectrumServer implements Closeable {
     private int connectionCount;
 
     public FakeElectrumServer() throws IOException {
-        this.serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+        this(0);
+    }
+
+    /** @param port the loopback port to listen on, or 0 for any free port */
+    public FakeElectrumServer(int port) throws IOException {
+        this.serverSocket = new ServerSocket(port, 50, InetAddress.getLoopbackAddress());
         Thread.ofVirtual().name("FakeElectrumServer").start(this::serve);
     }
 

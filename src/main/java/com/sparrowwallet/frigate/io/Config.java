@@ -465,6 +465,8 @@ public class Config {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ServerConfig {
         public static final int DEFAULT_BACKEND_REQUEST_TIMEOUT_SECONDS = 120;
+        public static final int DEFAULT_BACKEND_RECONNECT_MAX_BACKOFF_SECONDS = 60;
+        public static final int DEFAULT_BACKEND_PING_INTERVAL_SECONDS = 60;
 
         private List<String> host;
         private String tcp;
@@ -473,6 +475,8 @@ public class Config {
         private String sslKey;
         private String backendElectrumServer;
         private Integer backendRequestTimeoutSeconds;
+        private Integer backendReconnectMaxBackoffSeconds;
+        private Integer backendPingIntervalSeconds;
 
         @JsonIgnore
         private List<Server> advertisedHostsCache;
@@ -672,6 +676,22 @@ public class Config {
 
         public void setBackendRequestTimeoutSeconds(Integer backendRequestTimeoutSeconds) {
             this.backendRequestTimeoutSeconds = backendRequestTimeoutSeconds;
+        }
+
+        public int getBackendReconnectMaxBackoffSeconds() {
+            return backendReconnectMaxBackoffSeconds != null && backendReconnectMaxBackoffSeconds > 0 ? backendReconnectMaxBackoffSeconds : DEFAULT_BACKEND_RECONNECT_MAX_BACKOFF_SECONDS;
+        }
+
+        public void setBackendReconnectMaxBackoffSeconds(Integer backendReconnectMaxBackoffSeconds) {
+            this.backendReconnectMaxBackoffSeconds = backendReconnectMaxBackoffSeconds;
+        }
+
+        public int getBackendPingIntervalSeconds() {
+            return backendPingIntervalSeconds != null && backendPingIntervalSeconds > 0 ? backendPingIntervalSeconds : DEFAULT_BACKEND_PING_INTERVAL_SECONDS;
+        }
+
+        public void setBackendPingIntervalSeconds(Integer backendPingIntervalSeconds) {
+            this.backendPingIntervalSeconds = backendPingIntervalSeconds;
         }
     }
 

@@ -92,6 +92,20 @@ public class ScriptHashSubscriptionsTest {
     }
 
     @Test
+    public void subscribeReportsWhetherAdded() {
+        ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
+        assertTrue(subscriptions.subscribe(SCRIPT_HASH));
+        assertFalse(subscriptions.subscribe(SCRIPT_HASH));
+
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1, 1);
+        assertFalse(subscriptions.subscribe(SCRIPT_HASH));
+        assertEquals(STATUS_1, subscriptions.getStatus(SCRIPT_HASH));
+
+        subscriptions.unsubscribe(SCRIPT_HASH);
+        assertTrue(subscriptions.subscribe(SCRIPT_HASH));
+    }
+
+    @Test
     public void unsubscribeUnknownScriptHash() {
         ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
         assertFalse(subscriptions.unsubscribe(SCRIPT_HASH));
