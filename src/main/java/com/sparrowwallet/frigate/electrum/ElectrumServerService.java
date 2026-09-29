@@ -268,17 +268,14 @@ public class ElectrumServerService {
         return tip;
     }
 
+    /**
+     * A local no-op, answered without contacting Bitcoin Core: a client ping only keeps its session alive, and forwarding every
+     * client's regular ping to Core would load it in proportion to the number of clients. Core's health is monitored centrally.
+     */
     @JsonRpcMethod("server.ping")
-    public Object ping() throws BitcoindIOException {
+    public Object ping() {
         checkVersionNegotiated();
-        try {
-            if(bitcoindClient != null) {
-                bitcoindClient.getBitcoindService().uptime();
-            }
-            return null;
-        } catch(IllegalStateException e) {
-            throw new BitcoindIOException(e);
-        }
+        return null;
     }
 
     @JsonRpcMethod("blockchain.scripthash.subscribe")

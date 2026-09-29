@@ -306,6 +306,53 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void idleClientIsDisconnected() throws Exception {
+        Config.get().getLimits().setSessionTimeoutSeconds(1);
+        TestElectrumClient client = connectClient();
+        subscribe(client, scriptHash(0));
+        FakeElectrumBackend.Connection clientBackend = backend.getSubscribedConnections(scriptHash(0)).getFirst();
+
+        long start = System.nanoTime();
+        assertTrue(client.awaitDisconnect(10, TimeUnit.SECONDS));
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        assertTrue(elapsedMillis >= 900, "disconnected after " + elapsedMillis + "ms");
+        await(() -> !clientBackend.isOpen(), "backend connection to close with the session");
+    }
+
+    @Test
+    public void pingingClientStaysConnected() throws Exception {
+        Config.get().getLimits().setSessionTimeoutSeconds(1);
+        TestElectrumClient client = connectClient();
+
+        for(int i = 0; i < 8; i++) {
+            Thread.sleep(300);
+            JsonNode pong = client.request("server.ping");
+            assertTrue(pong.has("result") && pong.get("result").isNull(), pong.toString());
+        }
+
+        assertFalse(client.awaitDisconnect(0, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
+    public void requestArrivingSlowlyKeepsSessionAlive() throws Exception {
+        Config.get().getLimits().setSessionTimeoutSeconds(1);
+        TestElectrumClient client = connectClient();
+
+        //a request delivered in pieces over longer than the timeout, each piece arriving within it
+        String request = "{\"jsonrpc\":\"2.0\",\"id\":96,\"method\":\"blockchain.scripthash.get_history\",\"params\":[\"" + scriptHash(0) + "\"]}";
+        int pieceLength = request.length() / 8 + 1;
+        for(int i = 0; i < request.length(); i += pieceLength) {
+            client.sendPartial(request.substring(i, Math.min(i + pieceLength, request.length())));
+            Thread.sleep(300);
+        }
+        client.sendPartial("\n");
+
+        assertTrue(client.awaitResponse(96).path("result").isArray());
+        assertFalse(client.awaitDisconnect(0, TimeUnit.MILLISECONDS));
+    }
+
+    @Test
     public void slowClientDoesNotDelayOtherSessions() throws Exception {
         List<String> slowScriptHashes = IntStream.range(0, 2000).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
         TestElectrumClient slow = connectClient(4096);

@@ -23,6 +23,7 @@ import java.io.*;
 import java.lang.ref.WeakReference;
 import java.net.Socket;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -100,6 +101,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             Config.LimitsConfig limits = Config.get().getLimits();
             BoundedLineReader reader = new BoundedLineReader(clientSocket.getInputStream(), limits.getMaxRequestBytes());
             int maxBatchSize = limits.getMaxBatchSize();
+            //idle timeout: Electrum clients ping about every minute, so a session silent for this long is dead or abandoned
+            clientSocket.setSoTimeout((int)Math.min(TimeUnit.SECONDS.toMillis(limits.getSessionTimeoutSeconds()), Integer.MAX_VALUE));
 
             OutputStream output = clientSocket.getOutputStream();
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
@@ -112,6 +115,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                 String request;
                 try {
                     request = reader.readLine();
+                } catch(SocketTimeoutException e) {
+                    log.debug("Closing idle session for client " + clientSocket.getRemoteSocketAddress());
+                    break;
                 } catch(LineTooLongException e) {
                     //recovery inside an oversized line is not meaningfully possible, so report it and disconnect
                     log.warn("Disconnecting client " + clientSocket.getRemoteSocketAddress() + ": request exceeds " + e.getMaxLineBytes() + " bytes");

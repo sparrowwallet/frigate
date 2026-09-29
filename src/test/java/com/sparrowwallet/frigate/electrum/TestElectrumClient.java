@@ -94,6 +94,12 @@ public class TestElectrumClient implements Closeable {
         write(line);
     }
 
+    /** Sends raw text without a line terminator, to deliver a request in pieces. */
+    public synchronized void sendPartial(String text) {
+        out.print(text);
+        out.flush();
+    }
+
     /** @return the next response, such as an error response without an id, or null if none arrives within the timeout */
     public JsonNode pollResponse(long timeout, TimeUnit unit) throws InterruptedException {
         return responses.poll(timeout, unit);
