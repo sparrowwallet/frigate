@@ -13,6 +13,7 @@ import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncComplete;
 import com.sparrowwallet.frigate.index.*;
 import com.sparrowwallet.frigate.io.BoundedLineReader;
 import com.sparrowwallet.frigate.io.Config;
+import com.sparrowwallet.frigate.io.JsonRpcBatch;
 import com.sparrowwallet.frigate.io.LineTooLongException;
 import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
@@ -43,6 +44,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     //client that keeps its connection open can hold the session, and the budget the data read from one that keeps sending
     private static final long OVERSIZED_REQUEST_DRAIN_NANOS = TimeUnit.SECONDS.toNanos(2);
     private static final long OVERSIZED_REQUEST_DRAIN_BYTES = 16 * 1024 * 1024;
+    private static final String BATCH_TOO_LARGE = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"batch too large\"},\"id\":null}";
     private static final String PARSE_ERROR = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":\"Parse error\"},\"id\":null}";
     private final Socket clientSocket;
     private final ElectrumServerService electrumServerService;
@@ -95,7 +97,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         notifier.start();
 
         try {
-            BoundedLineReader reader = new BoundedLineReader(clientSocket.getInputStream(), Config.get().getLimits().getMaxRequestBytes());
+            Config.LimitsConfig limits = Config.get().getLimits();
+            BoundedLineReader reader = new BoundedLineReader(clientSocket.getInputStream(), limits.getMaxRequestBytes());
+            int maxBatchSize = limits.getMaxBatchSize();
 
             OutputStream output = clientSocket.getOutputStream();
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
@@ -122,6 +126,13 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                 if(request.indexOf(0) >= 0 || request.chars().anyMatch(c -> c < 32 && c != '\t' && c != '\r' && c != '\n')) {
                     log.warn("Rejecting malformed request with control characters");
                     writeLine(PARSE_ERROR);
+                    continue;
+                }
+
+                //reject an oversized batch without processing any of it; the session continues, as the stream is intact
+                if(JsonRpcBatch.countItems(request, maxBatchSize) > maxBatchSize) {
+                    log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
+                    writeLine(BATCH_TOO_LARGE);
                     continue;
                 }
 

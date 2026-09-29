@@ -60,13 +60,18 @@ public class TestElectrumClient implements Closeable {
         return id;
     }
 
-    /** Sends one batch of requests with the same method, one per parameter, and waits for the batch response array. */
-    public JsonNode requestBatch(String method, List<String> params) throws IOException, InterruptedException {
+    /** Sends one batch of requests with the same method, one per parameter, without waiting for the response. */
+    public void sendBatch(String method, List<String> params) {
         ArrayNode batch = MAPPER.createArrayNode();
         for(String param : params) {
             batch.add(requestNode(nextId.getAndIncrement(), method, param));
         }
         write(batch.toString());
+    }
+
+    /** Sends one batch of requests with the same method, one per parameter, and waits for the batch response array. */
+    public JsonNode requestBatch(String method, List<String> params) throws IOException, InterruptedException {
+        sendBatch(method, params);
 
         JsonNode response = responses.poll(30, TimeUnit.SECONDS);
         if(response == null || !response.isArray()) {

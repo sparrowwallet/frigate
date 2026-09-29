@@ -30,6 +30,7 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class ElectrumSessionIntegrationTest {
     private static final int MAX_REQUEST_BYTES = 4000;
+    private static final int MAX_BATCH_SIZE = 25;
 
     private FakeElectrumBackend backend;
     private ElectrumServerRunnable server;
@@ -43,6 +44,7 @@ public class ElectrumSessionIntegrationTest {
         config.getServer().setBackendRequestTimeoutSeconds(5);
         config.getServer().setBackendReconnectMaxBackoffSeconds(1);
         config.getLimits().setMaxRequestBytes(MAX_REQUEST_BYTES);
+        config.getLimits().setMaxBatchSize(MAX_BATCH_SIZE);
         Config.setInstance(config);
 
         server = new ElectrumServerRunnable(null, null, new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), null, null);
@@ -257,6 +259,36 @@ public class ElectrumSessionIntegrationTest {
 
         JsonNode response = client.awaitResponse(98);
         assertFalse(response.has("error") && !response.get("error").isNull(), response.toString());
+    }
+
+    @Test
+    public void batchAtLimitIsProcessed() throws Exception {
+        TestElectrumClient client = connectClient();
+        List<String> scriptHashes = IntStream.range(0, MAX_BATCH_SIZE).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
+
+        JsonNode responses = client.requestBatch("blockchain.scripthash.get_history", scriptHashes);
+
+        assertEquals(MAX_BATCH_SIZE, responses.size());
+        for(JsonNode response : responses) {
+            assertTrue(response.path("result").isArray(), response.toString());
+        }
+    }
+
+    @Test
+    public void batchOverLimitIsRejectedAndSessionContinues() throws Exception {
+        TestElectrumClient client = connectClient();
+        List<String> scriptHashes = IntStream.range(0, MAX_BATCH_SIZE + 1).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
+
+        client.sendBatch("blockchain.scripthash.subscribe", scriptHashes);
+
+        JsonNode error = client.pollResponse(5, TimeUnit.SECONDS);
+        assertNotNull(error);
+        assertEquals(-32600, errorCode(error));
+        assertEquals("batch too large", error.path("error").path("message").asText());
+        assertTrue(error.path("id").isNull());
+        //none of the batch was processed
+        assertTrue(backend.getSubscribedConnections(scriptHash(0)).isEmpty());
+        assertTrue(client.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
     }
 
     @Test
