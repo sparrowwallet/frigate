@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import java.io.*;
 import java.lang.ref.WeakReference;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -51,6 +52,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final ReentrantLock writeLock = new ReentrantLock();
     private volatile PrintWriter out;
     private final ElectrumNotificationService notificationService;
+    private final AsyncNotifier notifier;
 
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
         this.clientSocket = clientSocket;
@@ -66,11 +68,14 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
         this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);
+        this.notifier = new AsyncNotifier("ElectrumNotify-" + System.identityHashCode(this), AsyncNotifier.DEFAULT_QUEUE_SIZE, scriptHashSubscriptions,
+                notificationService::notifyScriptHash, this::disconnectSlowConsumer);
     }
 
     public void run() {
         Frigate.getEventBus().register(this);
         this.connected = true;
+        notifier.start();
 
         try {
             InputStream input = clientSocket.getInputStream();
@@ -103,6 +108,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         } catch(IOException e) {
             log.debug("Could not communicate with client socket: {}", e.getMessage());
         } finally {
+            notifier.close();
             closeBackendTransport();
             this.connected = false;
             this.disconnected.set(true);
@@ -111,11 +117,30 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                 headersDispatcher.unsubscribe(this);
             }
 
+            closeClientSocket(notifier.isDelivering());
+        }
+    }
+
+    /**
+     * An abortive close is needed when the notifier may be blocked writing to a client that has stopped reading: an SSL socket's
+     * close() first sends close_notify, which waits without limit for the write lock the blocked writer holds. With SO_LINGER
+     * set to zero the SSL socket only tries that lock, shuts the connection down directly, and the blocked write fails.
+     * It is not used for a normal close, where a TCP reset could discard a final response the client has not yet received.
+     */
+    private void closeClientSocket(boolean abortive) {
+        if(abortive) {
             try {
-                clientSocket.close();
-            } catch(IOException e) {
-                log.error("Error closing client socket", e);
+                clientSocket.setSoLinger(true, 0);
+            } catch(SocketException e) {
+                //the disconnect thread and the request thread's finally block can race to close the socket
+                log.debug("Could not set SO_LINGER on client socket, already closed: {}", e.getMessage());
             }
+        }
+
+        try {
+            clientSocket.close();
+        } catch(IOException e) {
+            log.error("Error closing client socket", e);
         }
     }
 
@@ -184,6 +209,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
 
     public void unsubscribeScriptHash(String scriptHash) {
         scriptHashSubscriptions.unsubscribe(scriptHash);
+        notifier.discardScriptHash(scriptHash);
     }
 
     @Override
@@ -242,16 +268,33 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
 
     @Override
     public void notifyHeaders(ElectrumBlockHeader electrumBlockHeader) {
-        notificationService.notifyHeaders(electrumBlockHeader);
+        notifier.notify(() -> notificationService.notifyHeaders(electrumBlockHeader));
     }
 
     void notifyScriptHash(String scriptHash, String status) {
-        notificationService.notifyScriptHash(scriptHash, status);
+        notifier.notifyScriptHash(scriptHash, status);
+    }
+
+    /**
+     * Called on whichever thread produced the overflowing notification (the headers dispatcher, a scan, or the backend reader),
+     * so the close runs on its own thread and can never block the producer. Closing the socket unblocks the request thread's
+     * read, whose finally block then tears down the session.
+     */
+    private void disconnectSlowConsumer() {
+        Thread.ofVirtual().name("ElectrumDisconnect-" + System.identityHashCode(this)).start(() -> closeClientSocket(true));
     }
 
     /**
      * Called directly by the scan that this session requested (no EventBus fan-out). Scans run on several threads, so calls are
      * serialized here to keep the mempool txid bookkeeping and the delivery filter atomic, as the EventBus previously guaranteed.
+     * The bookkeeping happens here; only the write to the client is deferred to the notifier, queued under the lock to keep order.
+     *
+     * Because the write is deferred, a client that reads slowly no longer throttles the scan: previously the scan thread blocked
+     * in writeLine, so a slow client simply received results slowly. Now notifications queue in the notifier, each holding its
+     * deliverable list in memory until sent, and a client that falls queueSize notifications behind is disconnected. Historical
+     * scans deliver pages of HISTORY_PAGE_SIZE (100) entries every 5 seconds, so this needs around 100k results in one poll
+     * interval, or a very slow link (such as Tor) during a long scan. Applying backpressure to the scan instead of disconnecting
+     * would restore the old behaviour for such clients.
      */
     @Override
     public void notifySilentPayments(SilentPaymentsNotification notification) {
@@ -270,7 +313,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             List<SilentPaymentsTxEntry> deliverable = notification.history().stream()
                     .filter(txEntry -> txEntry.height <= 0 || !subscription.getMempoolTxids().contains(Sha256Hash.wrap(txEntry.tx_hash))).toList();
 
-            notificationService.notifySilentPayments(notification.subscription(), notification.progress(), deliverable);
+            notifier.notify(() -> notificationService.notifySilentPayments(notification.subscription(), notification.progress(), deliverable));
         }
     }
 

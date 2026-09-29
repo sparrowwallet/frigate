@@ -278,6 +278,9 @@ public class ElectrumServerService {
             requestHandler.subscribeScriptHash(scriptHash);
             try {
                 String status = electrumBackendService.subscribeScriptHash(scriptHash);
+                //TODO: on a resubscribe, a notification read before this response may still be queued in the notifier and reach the client
+                //after this (newer) status, and the recorded status is not updated from this response. Fix with backend read sequence
+                //numbers: drop queued statuses older than the response and record whichever status is newer.
                 requestHandler.recordScriptHashSubscribeResponse(scriptHash, status);
                 return status;
             } catch(RuntimeException e) {
