@@ -17,7 +17,7 @@ public class BackendSubscriptionServiceTest {
     private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
     private final ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
     private final List<List<String>> delivered = new ArrayList<>();
-    private final BackendSubscriptionService service = new BackendSubscriptionService(subscriptions, (scriptHash, status) -> delivered.add(Arrays.asList(scriptHash, status)));
+    private final BackendSubscriptionService service = new BackendSubscriptionService(subscriptions, (scriptHash, status, sequence) -> delivered.add(Arrays.asList(scriptHash, status)));
 
     @Test
     public void subscribedNotificationIsRecordedAndDelivered() {
@@ -32,12 +32,12 @@ public class BackendSubscriptionServiceTest {
     @Test
     public void nullStatusNotificationIsDelivered() {
         subscriptions.subscribe(SCRIPT_HASH);
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS);
 
         handle(notification(SCRIPT_HASH, "null"));
 
         assertEquals(List.of(Arrays.asList(SCRIPT_HASH, null)), delivered);
         assertTrue(subscriptions.isSubscribed(SCRIPT_HASH));
+        assertFalse(subscriptions.isPending(SCRIPT_HASH));
         assertNull(subscriptions.getStatus(SCRIPT_HASH));
     }
 

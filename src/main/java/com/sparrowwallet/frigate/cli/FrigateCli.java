@@ -77,7 +77,12 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
 
     public void connect() {
         transport = new ElectrumTransport(server, Protocol.TCP, new SubscriptionService());
-        transport.connect();
+        try {
+            transport.connect();
+        } catch(IOException e) {
+            getLogger().error(e.getMessage());
+            System.exit(1);
+        }
         reader = Thread.ofVirtual().name("ElectrumServerReadThread").unstarted(new ReadRunnable());
         reader.setUncaughtExceptionHandler(FrigateCli.this);
         reader.start();

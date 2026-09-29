@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.net.SocketFactory;
+import javax.net.ssl.SSLSocket;
 import javax.net.ssl.SSLSocketFactory;
 import java.io.*;
 import java.net.*;
@@ -19,77 +20,140 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Condition;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * A newline-delimited JSON-RPC connection to an Electrum server. Requests are serial: pass() writes one request and waits for
+ * the response carrying the same ids. A reader thread running readInputLoop() dispatches notifications to the subscription
+ * service and queues responses for pass(), never waiting for a caller to collect them, so notifications keep flowing even
+ * when a response is not collected (for example after a request timed out).
+ *
+ * The transport can be connected again after a connection is lost. Each connection has its own reader, started on a new thread
+ * after connect(), and responses and loss signals are tagged with their connection, so nothing from an abandoned connection
+ * (such as its reader exiting late) can affect the current one.
+ *
+ * Every line read is given a sequence number that increases across all transports. It orders a notification against the
+ * response to a request (see getReadSequence()), which lets callers tell which of two statuses for a scripthash is newer.
+ */
 public class ElectrumTransport implements Transport, Closeable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumTransport.class);
-
-    private final HostAndPort electrumServer;
-    private final Protocol protocol;
-    private Socket socket;
-    private String response;
-
-    private boolean firstRead = true;
-
-    private final CountDownLatch readReadySignal = new CountDownLatch(1);
-
-    private final ReentrantLock readLock = new ReentrantLock();
-    private final Condition readingCondition = readLock.newCondition();
-
-    private final ReentrantLock clientRequestLock = new ReentrantLock();
-    private volatile boolean running = false;
-    private volatile boolean reading = true;
-    private volatile boolean closed = false;
-    private Exception lastException;
 
     private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
     private static final JsonFactory JSON_FACTORY = new JsonFactory();
 
-    private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
-    private final Object subscriptionService;
+    private static final AtomicLong READ_SEQUENCE = new AtomicLong();
+    private static final ThreadLocal<Long> DELIVERED_SEQUENCE = ThreadLocal.withInitial(() -> 0L);
+    private static final ScheduledExecutorService WRITE_WATCHDOG = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "ElectrumTransportWriteWatchdog");
+        thread.setDaemon(true);
+        return thread;
+    });
 
-    private PrintWriter out;
-    private BufferedReader in;
+    private final HostAndPort electrumServer;
+    private final Protocol protocol;
+    private final Object subscriptionService;
+    private final long requestTimeoutMillis;
+
+    private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
+    private final ReentrantLock clientRequestLock = new ReentrantLock();
+    private final BlockingQueue<Message> responses = new LinkedBlockingQueue<>();
+
+    private volatile Connection connection;
+    private volatile boolean closed;
+    private volatile Exception lastException;
 
     public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService) {
+        this(electrumServer, protocol, subscriptionService, 0);
+    }
+
+    /**
+     * @param requestTimeoutMillis the maximum time to connect (including the TLS handshake), and to complete each request
+     *                             (writing it and receiving the response), or 0 to wait indefinitely. A request that times out
+     *                             closes the connection, as the state of a backend that has not responded is unknown, and a
+     *                             fresh connection cannot deliver its late response.
+     */
+    public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis) {
         this.electrumServer = electrumServer;
         this.protocol = protocol;
         this.subscriptionService = subscriptionService;
+        this.requestTimeoutMillis = requestTimeoutMillis;
     }
 
-    public void connect() {
-        try {
-            String host = electrumServer.getHost();
-            int port = electrumServer.hasPort() ? electrumServer.getPort() : protocol.getDefaultPort();
+    /**
+     * Returns the read sequence of the backend message most recently delivered to the current thread: on the reader thread, the
+     * notification being dispatched; on a calling thread, the response last returned by pass().
+     */
+    public static long getReadSequence() {
+        return DELIVERED_SEQUENCE.get();
+    }
 
-            SocketFactory socketFactory;
-            if(protocol == Protocol.SSL) {
-                SSLSocketFactory sslSocketFactory = SslUtil.getTrustAllSocketFactory();
-                if(sslSocketFactory == null) {
-                    log.error("Could not create SSL socket factory for Electrum server: " + host);
-                    return;
-                }
-                socketFactory = sslSocketFactory;
-            } else {
-                socketFactory = SocketFactory.getDefault();
-            }
-
-            this.socket = socketFactory.createSocket();
-            this.socket.connect(new InetSocketAddress(host, port));
-            this.socket.setSoTimeout(30000); // 30 second timeout for reads
-            this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8)));
-            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
-            this.running = true;
-        } catch(UnknownHostException e) {
-            log.error("Unknown host: " + electrumServer.getHost());
-        } catch(IOException e) {
-            log.error("Error connecting to Electrum server: " + electrumServer.getHost());
+    public void connect() throws IOException {
+        if(closed) {
+            throw new BackendUnavailableException("transport closed");
         }
+
+        String host = electrumServer.getHost();
+        int port = electrumServer.hasPort() ? electrumServer.getPort() : protocol.getDefaultPort();
+
+        SocketFactory socketFactory;
+        if(protocol == Protocol.SSL) {
+            SSLSocketFactory sslSocketFactory = SslUtil.getTrustAllSocketFactory();
+            if(sslSocketFactory == null) {
+                throw new IOException("Could not create SSL socket factory for Electrum server " + host);
+            }
+            socketFactory = sslSocketFactory;
+        } else {
+            socketFactory = SocketFactory.getDefault();
+        }
+
+        //socket timeouts are ints, so clamp rather than overflow to a negative value for very long timeouts
+        int socketTimeoutMillis = (int)Math.min(requestTimeoutMillis, Integer.MAX_VALUE);
+        Socket newSocket = socketFactory.createSocket();
+        try {
+            newSocket.connect(new InetSocketAddress(host, port), socketTimeoutMillis);
+            if(newSocket instanceof SSLSocket sslSocket) {
+                //complete the handshake here under the timeout, rather than lazily on the first read or write, where it has none
+                sslSocket.setSoTimeout(socketTimeoutMillis);
+                sslSocket.startHandshake();
+                sslSocket.setSoTimeout(0);
+            }
+        } catch(UnknownHostException e) {
+            newSocket.close();
+            throw new IOException("Unknown host " + host, e);
+        } catch(IOException e) {
+            newSocket.close();
+            throw new IOException("Error connecting to Electrum server " + electrumServer + ": " + e.getMessage(), e);
+        }
+
+        Connection newConnection = new Connection(newSocket);
+        Connection previous = connection;
+        if(previous != null) {
+            previous.close();
+        }
+        //the response queue is not cleared: a pass() still waiting on the previous connection needs its connection-lost signal,
+        //and messages left over from previous connections are skipped by pass() as they are tagged with their connection
+        lastException = null;
+        this.connection = newConnection;
+
+        if(closed) {
+            //closed while connecting
+            newConnection.close();
+            throw new BackendUnavailableException("transport closed");
+        }
+    }
+
+    public boolean isConnected() {
+        Connection current = connection;
+        return current != null && current.open;
     }
 
     @Override
@@ -97,168 +161,110 @@ public class ElectrumTransport implements Transport, Closeable {
         Set<String> sentIdSet = extractIdSet(request);
         clientRequestLock.lock();
         try {
-            writeRequest(request);
+            Connection current = connection;
+            if(current == null || !current.open) {
+                throw new BackendUnavailableException(closed ? "transport closed" : "not connected");
+            }
 
-            String recv;
-            Set<String> recvIdSet;
-            do {
-                recv = readResponse();
-                recvIdSet = extractIdSet(recv);
-                if(!sentIdSet.equals(recvIdSet)) {
-                    log.info("Discarding stale response with ids " + recvIdSet + " (expected " + sentIdSet + ")");
+            long deadline = requestTimeoutMillis > 0 ? System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(requestTimeoutMillis) : 0;
+            writeRequest(current, request);
+
+            while(true) {
+                Message message = deadline == 0 ? responses.take() : responses.poll(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                if(message == null) {
+                    log.warn("Request to Electrum server " + electrumServer + " timed out after " + requestTimeoutMillis + "ms, closing connection");
+                    current.close();
+                    throw new BackendUnavailableException("request timed out");
                 }
-            } while(!sentIdSet.equals(recvIdSet));
+                if(message.connection() != current) {
+                    //left over from an abandoned connection
+                    continue;
+                }
+                if(message.isConnectionLost()) {
+                    throw new BackendUnavailableException("connection lost");
+                }
 
-            return recv;
+                Set<String> recvIdSet = extractIdSet(message.json());
+                if(sentIdSet.equals(recvIdSet)) {
+                    DELIVERED_SEQUENCE.set(message.sequence());
+                    return message.json();
+                }
+                log.info("Discarding stale response with ids " + recvIdSet + " (expected " + sentIdSet + ")");
+            }
+        } catch(InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new InterruptedIOException("Interrupted waiting for response from Electrum server " + electrumServer);
         } finally {
             clientRequestLock.unlock();
         }
     }
 
-    protected void writeRequest(String request) throws IOException {
+    /**
+     * Writes a request. Socket timeouts do not apply to writes, so a write blocked by a backend that has stopped reading is
+     * bounded by a watchdog that closes the connection at the request timeout, failing the write.
+     */
+    private void writeRequest(Connection current, String request) throws IOException {
         log.debug("> " + request);
 
-        if(out == null) {
-            throw new IllegalStateException("Socket connection has not been established.");
+        ScheduledFuture<?> watchdog = requestTimeoutMillis > 0 ? WRITE_WATCHDOG.schedule(current::close, requestTimeoutMillis, TimeUnit.MILLISECONDS) : null;
+        current.out.println(request);
+        boolean failed = current.out.checkError();
+        boolean timedOut = watchdog != null && !watchdog.cancel(false);
+        if(failed || timedOut) {
+            if(timedOut) {
+                log.warn("Request to Electrum server " + electrumServer + " could not be written within " + requestTimeoutMillis + "ms, closing connection");
+            }
+            current.close();
+            throw new BackendUnavailableException(timedOut ? "request timed out" : "connection lost");
         }
-
-        out.println(request);
-        out.flush();
     }
 
-    private String readResponse() throws IOException {
-        if(firstRead) {
-            try {
-                //Ensure read thread has started
-                if(!readReadySignal.await(2, TimeUnit.SECONDS)) {
-                    throw new IOException("Read thread did not start");
-                }
-            } catch(InterruptedException e) {
-                throw new IOException("Read ready await interrupted");
-            }
+    /**
+     * Reads from the current connection until it is lost or closed, dispatching notifications and queuing responses. Call once
+     * per connect(), on a new thread. Returns normally; if the connection was lost rather than closed, getLastException() holds
+     * the cause.
+     */
+    public void readInputLoop() {
+        Connection current = connection;
+        if(current == null) {
+            return;
         }
 
-        readLock.lock();
         try {
-            if(firstRead) {
-                readingCondition.signal();
-                firstRead = false;
-            }
+            while(!closed) {
+                String received = current.in.readLine();
+                if(received == null) {
+                    throw new EOFException("Connection closed by Electrum server " + electrumServer);
+                }
+                log.debug("< " + received);
 
-            while(reading && running) {
-                try {
-                    readingCondition.await();
-                } catch(InterruptedException e) {
-                    //Restore interrupt status and break
-                    Thread.currentThread().interrupt();
+                //the sequence is taken before checking the connection is still open: if it is, connect() has not yet replaced it,
+                //so every line of a replacing connection is read later and has a higher sequence. Lines still buffered from a
+                //replaced connection are dropped, so a stale status cannot overwrite a newer one from the current connection.
+                long sequence = READ_SEQUENCE.incrementAndGet();
+                if(!current.open) {
                     break;
                 }
-            }
-
-            if(lastException != null) {
-                throw new IOException("Error reading response: " + lastException.getMessage(), lastException);
-            }
-
-            if(!running) {
-                throw new IOException("Transport closed");
-            }
-
-            reading = true;
-
-            readingCondition.signal();
-            return response;
-        } finally {
-            readLock.unlock();
-        }
-    }
-
-    public void readInputLoop() throws Exception {
-        //Wait for first RPC request before starting to read. The lock must be acquired before
-        //signaling readiness so readResponse() blocks until we reach the atomic await/unlock.
-        readLock.lock();
-        try {
-            readReadySignal.countDown();
-            if(running) {
-                readingCondition.await();
-            }
-        } catch(InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return;
-        } finally {
-            readLock.unlock();
-        }
-
-        while(running) {
-            try {
-                String received = readInputStream(in);
                 if(isNotification(received)) {
-                    jsonRpcServer.handle(received, subscriptionService);
+                    DELIVERED_SEQUENCE.set(sequence);
+                    try {
+                        jsonRpcServer.handle(received, subscriptionService);
+                    } catch(Exception e) {
+                        log.error("Error handling notification from Electrum server", e);
+                    }
                 } else {
-                    deliverResponse(received);
-                }
-            } catch(InterruptedException e) {
-                //Restore interrupt status and continue
-                Thread.currentThread().interrupt();
-            } catch(Exception e) {
-                if(!closed) {
-                    log.trace("Connection error while reading", e);
-                }
-                if(running) {
-                    signalException(e);
-                    //Allow this thread to terminate as we will need to reconnect with a new transport anyway
-                    running = false;
+                    responses.add(new Message(received, sequence, current));
                 }
             }
-        }
-    }
-
-    private void deliverResponse(String received) throws InterruptedException {
-        readLock.lock();
-        try {
-            response = received;
-            reading = false;
-            readingCondition.signal();
-            while(!reading && running) {
-                readingCondition.await();
+        } catch(Exception e) {
+            if(!closed && current == connection) {
+                log.trace("Connection error while reading", e);
+                lastException = e;
             }
         } finally {
-            readLock.unlock();
+            current.open = false;
+            responses.add(Message.connectionLost(current));
         }
-    }
-
-    private void signalException(Exception e) {
-        readLock.lock();
-        try {
-            lastException = e;
-            reading = false;
-            readingCondition.signal();
-        } finally {
-            readLock.unlock();
-        }
-    }
-
-    protected String readInputStream(BufferedReader in) throws IOException {
-        String response = readLine(in);
-
-        if(response == null) {
-            throw new IOException("Could not connect to server " + electrumServer);
-        }
-
-        log.debug("< " + response);
-
-        return response;
-    }
-
-    private String readLine(BufferedReader in) throws IOException {
-        while(!socket.isClosed()) {
-            try {
-                return in.readLine();
-            } catch(SocketTimeoutException e) {
-                //ignore and continue
-            }
-        }
-
-        return null;
     }
 
     private static boolean isNotification(String json) {
@@ -285,26 +291,16 @@ public class ElectrumTransport implements Transport, Closeable {
         return lastException;
     }
 
+    /**
+     * Closes the transport permanently.
+     */
     @Override
     public void close() throws IOException {
-        running = false;
         closed = true;
-
-        readLock.lock();
-        try {
-            readingCondition.signalAll();
-        } finally {
-            readLock.unlock();
-        }
-
-        if(out != null) {
-            out.close();
-        }
-        if(in != null) {
-            in.close();
-        }
-        if(socket != null) {
-            socket.close();
+        Connection current = connection;
+        if(current != null) {
+            current.close();
+            responses.add(Message.connectionLost(current));
         }
     }
 
@@ -322,5 +318,52 @@ public class ElectrumTransport implements Transport, Closeable {
             ids.add(m.group(1));
         }
         return ids;
+    }
+
+    private static final class Connection {
+        private final Socket socket;
+        private final PrintWriter out;
+        private final BufferedReader in;
+        private volatile boolean open = true;
+
+        Connection(Socket socket) throws IOException {
+            this.socket = socket;
+            this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8)));
+            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+        }
+
+        /**
+         * Closes this connection only; its reader's loop ends, and the transport may be connected again.
+         *
+         * The close is abortive (SO_LINGER 0): it may be called while another thread is blocked writing, and an SSL socket's
+         * graceful close first sends close_notify, which waits without limit for the write lock the blocked writer holds.
+         * Discarding unsent data does not matter on a connection that is being abandoned.
+         */
+        void close() {
+            open = false;
+            try {
+                socket.setSoLinger(true, 0);
+            } catch(SocketException e) {
+                //already closed
+            }
+            try {
+                socket.close();
+            } catch(IOException e) {
+                log.debug("Error closing connection to Electrum server", e);
+            }
+        }
+    }
+
+    /**
+     * A response read from a connection, or (with null json) the signal that the connection has been lost.
+     */
+    private record Message(String json, long sequence, Connection connection) {
+        static Message connectionLost(Connection connection) {
+            return new Message(null, 0, connection);
+        }
+
+        boolean isConnectionLost() {
+            return json == null;
+        }
     }
 }

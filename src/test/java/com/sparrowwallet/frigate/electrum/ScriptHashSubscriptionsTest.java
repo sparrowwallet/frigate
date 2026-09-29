@@ -16,25 +16,25 @@ public class ScriptHashSubscriptionsTest {
         assertTrue(subscriptions.isSubscribed(SCRIPT_HASH));
         assertTrue(subscriptions.isPending(SCRIPT_HASH));
 
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1);
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1, 1);
 
         assertFalse(subscriptions.isPending(SCRIPT_HASH));
         assertEquals(STATUS_1, subscriptions.getStatus(SCRIPT_HASH));
     }
 
     @Test
-    public void nullStatusRoundTrips() {
+    public void nullStatusIsRecorded() {
         ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
         subscriptions.subscribe(SCRIPT_HASH);
 
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, null);
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, null, 1);
 
         assertTrue(subscriptions.isSubscribed(SCRIPT_HASH));
         assertFalse(subscriptions.isPending(SCRIPT_HASH));
         assertNull(subscriptions.getStatus(SCRIPT_HASH));
 
-        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_1));
-        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, null));
+        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_1, 2));
+        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, null, 3));
         assertNull(subscriptions.getStatus(SCRIPT_HASH));
     }
 
@@ -42,35 +42,38 @@ public class ScriptHashSubscriptionsTest {
     public void notificationUpdatesStatus() {
         ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
         subscriptions.subscribe(SCRIPT_HASH);
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1);
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1, 1);
 
-        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_2));
-
-        assertEquals(STATUS_2, subscriptions.getStatus(SCRIPT_HASH));
-    }
-
-    @Test
-    public void notificationRecordedBeforeResponseIsNotOverwritten() {
-        ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
-        subscriptions.subscribe(SCRIPT_HASH);
-
-        //the backend reader thread records a notification before the request thread records the (older) subscribe response
-        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_2));
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1);
+        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_2, 2));
 
         assertEquals(STATUS_2, subscriptions.getStatus(SCRIPT_HASH));
     }
 
     @Test
-    public void resubscribeKeepsRecordedStatus() {
+    public void notificationRecordedBeforeOlderResponseIsNotOverwritten() {
         ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
         subscriptions.subscribe(SCRIPT_HASH);
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1);
 
+        //the backend reader thread records a notification read after the response, before the request thread records the response
+        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_2, 6));
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1, 5);
+
+        assertEquals(STATUS_2, subscriptions.getStatus(SCRIPT_HASH));
+    }
+
+    @Test
+    public void resubscribeResponseReplacesOlderNotification() {
+        ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
         subscriptions.subscribe(SCRIPT_HASH);
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1, 1);
+        assertTrue(subscriptions.recordNotification(SCRIPT_HASH, STATUS_1, 2));
 
+        //the client subscribes again, and the backend responds with a newer status than the last notification
+        subscriptions.subscribe(SCRIPT_HASH);
         assertFalse(subscriptions.isPending(SCRIPT_HASH));
-        assertEquals(STATUS_1, subscriptions.getStatus(SCRIPT_HASH));
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_2, 3);
+
+        assertEquals(STATUS_2, subscriptions.getStatus(SCRIPT_HASH));
         assertEquals(1, subscriptions.size());
     }
 
@@ -78,11 +81,11 @@ public class ScriptHashSubscriptionsTest {
     public void notificationForUnsubscribedScriptHashIsNotRecorded() {
         ScriptHashSubscriptions subscriptions = new ScriptHashSubscriptions();
         subscriptions.subscribe(SCRIPT_HASH);
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1);
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_1, 1);
         assertTrue(subscriptions.unsubscribe(SCRIPT_HASH));
 
-        assertFalse(subscriptions.recordNotification(SCRIPT_HASH, STATUS_2));
-        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_2);
+        assertFalse(subscriptions.recordNotification(SCRIPT_HASH, STATUS_2, 2));
+        subscriptions.recordSubscribeResponse(SCRIPT_HASH, STATUS_2, 3);
 
         assertFalse(subscriptions.isSubscribed(SCRIPT_HASH));
         assertEquals(0, subscriptions.size());

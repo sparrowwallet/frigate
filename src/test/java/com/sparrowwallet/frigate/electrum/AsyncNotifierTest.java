@@ -51,6 +51,12 @@ public class AsyncNotifierTest {
         return notifier;
     }
 
+    private long sequence;
+
+    private void notifyStatus(String scriptHash, String status) {
+        notifier.notifyScriptHash(scriptHash, status, ++sequence);
+    }
+
     private void write(String entry) {
         if(blockFirstWrite) {
             blockFirstWrite = false;
@@ -90,7 +96,7 @@ public class AsyncNotifierTest {
             threadNames.add(Thread.currentThread().getName());
             delivered.add("header");
         });
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
 
         awaitDelivered(2);
         assertEquals(List.of("header", SCRIPT_HASH_A + ":" + STATUS_1), delivered);
@@ -102,10 +108,10 @@ public class AsyncNotifierTest {
         createNotifier(10);
         startWithStalledClient();
 
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_2);
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_3);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_2);
+        notifyStatus(SCRIPT_HASH_A, STATUS_3);
         assertEquals(2, notifier.getPendingCount());
 
         releaseWriter.countDown();
@@ -120,10 +126,10 @@ public class AsyncNotifierTest {
         createNotifier(10);
         startWithStalledClient();
 
-        notifier.notifyScriptHash(SCRIPT_HASH_A, null);
-        notifier.notifyScriptHash(SCRIPT_HASH_A, null);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, null);
+        notifyStatus(SCRIPT_HASH_A, null);
+        notifyStatus(SCRIPT_HASH_A, null);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
+        notifyStatus(SCRIPT_HASH_B, null);
         assertEquals(2, notifier.getPendingCount());
 
         releaseWriter.countDown();
@@ -137,7 +143,7 @@ public class AsyncNotifierTest {
         createNotifier(10);
         startWithStalledClient();
 
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
         notifier.notify(() -> delivered.add("header"));
         releaseWriter.countDown();
 
@@ -155,7 +161,7 @@ public class AsyncNotifierTest {
         assertEquals(0, overflows.get());
         notifier.notify(() -> delivered.add("3"));
         notifier.notify(() -> delivered.add("4"));
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
 
         assertEquals(1, overflows.get());
         assertTrue(notifier.isClosed());
@@ -170,10 +176,10 @@ public class AsyncNotifierTest {
         createNotifier(1);
         startWithStalledClient();
 
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
         assertEquals(0, overflows.get());
-        notifier.notifyScriptHash(SCRIPT_HASH_C, STATUS_1);
+        notifyStatus(SCRIPT_HASH_C, STATUS_1);
 
         assertEquals(1, overflows.get());
         assertTrue(notifier.isClosed());
@@ -187,7 +193,7 @@ public class AsyncNotifierTest {
         notifier.close();
 
         assertTrue(notifier.awaitTermination(5000));
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
         notifier.notify(() -> delivered.add("header"));
         assertEquals(0, notifier.getPendingCount());
         assertEquals(0, overflows.get());
@@ -197,7 +203,7 @@ public class AsyncNotifierTest {
     public void closeDiscardsUndelivered() throws InterruptedException {
         createNotifier(10);
         startWithStalledClient();
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
         notifier.notify(() -> delivered.add("header"));
 
         notifier.close();
@@ -212,8 +218,8 @@ public class AsyncNotifierTest {
         createNotifier(10);
         startWithStalledClient();
 
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
         notifier.discardScriptHash(SCRIPT_HASH_A);
         assertEquals(1, notifier.getPendingCount());
 
@@ -228,10 +234,10 @@ public class AsyncNotifierTest {
         createNotifier(10);
         startWithStalledClient();
 
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
         notifier.discardScriptHash(SCRIPT_HASH_A);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_2);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_2);
         releaseWriter.countDown();
 
         awaitDelivered(3);
@@ -251,7 +257,7 @@ public class AsyncNotifierTest {
 
         List<String> scriptHashes = List.of(SCRIPT_HASH_A, SCRIPT_HASH_B, SCRIPT_HASH_C, SCRIPT_HASH_D);
         for(String scriptHash : scriptHashes) {
-            notifier.notifyScriptHash(scriptHash, STATUS_1);
+            notifyStatus(scriptHash, STATUS_1);
         }
 
         //the client unsubscribes everything and subscribes one new scripthash
@@ -260,7 +266,7 @@ public class AsyncNotifierTest {
             notifier.discardScriptHash(scriptHash);
         }
         subscriptions.subscribe(SCRIPT_HASH_E);
-        notifier.notifyScriptHash(SCRIPT_HASH_E, STATUS_1);
+        notifyStatus(SCRIPT_HASH_E, STATUS_1);
 
         assertEquals(0, overflows.get());
         assertEquals(1, notifier.getPendingCount());
@@ -274,8 +280,8 @@ public class AsyncNotifierTest {
         //the unsubscribe and its discard run between the backend notification being recorded and it being queued
         subscriptions.unsubscribe(SCRIPT_HASH_A);
         notifier.discardScriptHash(SCRIPT_HASH_A);
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
-        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
         releaseWriter.countDown();
 
         awaitDelivered(2);
@@ -283,6 +289,56 @@ public class AsyncNotifierTest {
         notifier.notify(() -> delivered.add("marker"));
         awaitDelivered(3);
         assertEquals(List.of("stall", SCRIPT_HASH_B + ":" + STATUS_1, "marker"), delivered);
+    }
+
+    @Test
+    public void subscribeResponseDiscardsOnlyOlderPendingStatus() throws InterruptedException {
+        createNotifier(10);
+        startWithStalledClient();
+
+        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1, 10);
+        notifier.notifyScriptHash(SCRIPT_HASH_B, STATUS_1, 12);
+        //a subscribe response read at sequence 11 supersedes A's pending status but not B's
+        notifier.discardScriptHash(SCRIPT_HASH_A, 11);
+        notifier.discardScriptHash(SCRIPT_HASH_B, 11);
+        releaseWriter.countDown();
+
+        awaitDelivered(2);
+        assertEquals(List.of("stall", SCRIPT_HASH_B + ":" + STATUS_1), delivered);
+    }
+
+    @Test
+    public void heldStatusIsDeliveredAfterRelease() throws InterruptedException {
+        createNotifier(10);
+        notifier.start();
+
+        //a subscribe for A is in progress: its newer status must not reach the client before the subscribe response
+        notifier.hold(SCRIPT_HASH_A);
+        notifyStatus(SCRIPT_HASH_A, STATUS_2);
+        notifyStatus(SCRIPT_HASH_B, STATUS_1);
+        awaitDelivered(1);
+        assertEquals(List.of(SCRIPT_HASH_B + ":" + STATUS_1), delivered);
+        assertEquals(1, notifier.getPendingCount());
+
+        //the request thread writes the subscribe response, then releases
+        delivered.add("response");
+        notifier.releaseHeld();
+
+        awaitDelivered(3);
+        assertEquals(List.of(SCRIPT_HASH_B + ":" + STATUS_1, "response", SCRIPT_HASH_A + ":" + STATUS_2), delivered);
+    }
+
+    @Test
+    public void closeWakesDrainThreadWaitingOnHeldStatus() throws InterruptedException {
+        createNotifier(10);
+        notifier.start();
+        notifier.hold(SCRIPT_HASH_A);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
+
+        notifier.close();
+
+        assertTrue(notifier.awaitTermination(5000));
+        assertTrue(delivered.isEmpty());
     }
 
     @Test
@@ -307,7 +363,7 @@ public class AsyncNotifierTest {
         notifier.notify(() -> {
             throw new IllegalStateException("write failed");
         });
-        notifier.notifyScriptHash(SCRIPT_HASH_A, STATUS_1);
+        notifyStatus(SCRIPT_HASH_A, STATUS_1);
 
         awaitDelivered(1);
         assertEquals(List.of(SCRIPT_HASH_A + ":" + STATUS_1), delivered);

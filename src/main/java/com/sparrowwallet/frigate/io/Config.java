@@ -464,12 +464,15 @@ public class Config {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ServerConfig {
+        public static final int DEFAULT_BACKEND_REQUEST_TIMEOUT_SECONDS = 120;
+
         private List<String> host;
         private String tcp;
         private String ssl;
         private String sslCert;
         private String sslKey;
         private String backendElectrumServer;
+        private Integer backendRequestTimeoutSeconds;
 
         @JsonIgnore
         private List<Server> advertisedHostsCache;
@@ -661,6 +664,14 @@ public class Config {
         @JsonIgnore
         public Server getBackendElectrumServerObj() {
             return backendElectrumServer != null ? Server.fromString(backendElectrumServer) : null;
+        }
+
+        public int getBackendRequestTimeoutSeconds() {
+            return backendRequestTimeoutSeconds != null && backendRequestTimeoutSeconds > 0 ? backendRequestTimeoutSeconds : DEFAULT_BACKEND_REQUEST_TIMEOUT_SECONDS;
+        }
+
+        public void setBackendRequestTimeoutSeconds(Integer backendRequestTimeoutSeconds) {
+            this.backendRequestTimeoutSeconds = backendRequestTimeoutSeconds;
         }
     }
 

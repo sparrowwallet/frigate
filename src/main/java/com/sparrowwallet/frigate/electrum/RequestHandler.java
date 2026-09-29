@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -39,7 +40,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final JsonRpcServer rpcServer = new JsonRpcServer();
     private final AtomicBoolean disconnected = new AtomicBoolean(false);
     private final ElectrumTransport backendTransport;
-    private final Thread reader;
+    private volatile Thread reader;
     private final HeadersDispatcher headersDispatcher;
 
     private boolean connected;
@@ -57,14 +58,14 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
         this.clientSocket = clientSocket;
         this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
-        Server backendServer = Config.get().getServer().getBackendElectrumServerObj();
+        Config.ServerConfig serverConfig = Config.get().getServer();
+        Server backendServer = serverConfig.getBackendElectrumServerObj();
         if(backendServer != null) {
-            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(), new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash));
-            this.reader = Thread.ofVirtual().name("BackendServerReadThread-" + System.identityHashCode(this)).unstarted(new ReadRunnable(backendTransport));
-            reader.setUncaughtExceptionHandler(this);
+            long requestTimeoutMillis = TimeUnit.SECONDS.toMillis(serverConfig.getBackendRequestTimeoutSeconds());
+            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(),
+                    new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash), requestTimeoutMillis);
         } else {
             this.backendTransport = null;
-            this.reader = null;
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
         this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);
@@ -100,8 +101,13 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                     continue;
                 }
 
-                String response = rpcServer.handle(request, electrumServerService);
-                writeLine(response);
+                try {
+                    String response = rpcServer.handle(request, electrumServerService);
+                    writeLine(response);
+                } finally {
+                    //statuses held for subscribes in this request can follow the response now it has been written
+                    notifier.releaseHeld();
+                }
 
                 runPostResponseTasks();
             }
@@ -159,13 +165,23 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     }
 
     private void connectBackendTransport() {
-        if(backendTransport != null) {
-            backendTransport.connect();
+        if(backendTransport == null) {
+            return;
         }
 
-        if(reader != null && !reader.isAlive()) {
-            reader.start();
+        try {
+            backendTransport.connect();
+        } catch(IOException e) {
+            //proxied requests fail with BackendUnavailableException while the transport is not connected
+            log.error(e.getMessage());
+            return;
         }
+
+        //each connection is read by its own thread, as a finished thread cannot be restarted
+        Thread newReader = Thread.ofVirtual().name("BackendServerReadThread-" + System.identityHashCode(this)).unstarted(this::readBackend);
+        newReader.setUncaughtExceptionHandler(this);
+        reader = newReader;
+        newReader.start();
     }
 
     private void closeBackendTransport() {
@@ -177,8 +193,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             }
         }
 
-        if(reader != null && reader.isAlive()) {
-            reader.interrupt();
+        Thread current = reader;
+        if(current != null && current.isAlive()) {
+            current.interrupt();
         }
     }
 
@@ -199,12 +216,21 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         return headersSubscribed;
     }
 
+    /**
+     * Called before the backend subscribe request is sent. Statuses for the scripthash are held back from the client until the
+     * response has been written, see AsyncNotifier.
+     */
     public void subscribeScriptHash(String scriptHash) {
         scriptHashSubscriptions.subscribe(scriptHash);
+        notifier.hold(scriptHash);
     }
 
-    public void recordScriptHashSubscribeResponse(String scriptHash, String status) {
-        scriptHashSubscriptions.recordSubscribeResponse(scriptHash, status);
+    /**
+     * @param sequence the backend read sequence of the subscribe response, see ElectrumTransport.getReadSequence()
+     */
+    public void recordScriptHashSubscribeResponse(String scriptHash, String status, long sequence) {
+        scriptHashSubscriptions.recordSubscribeResponse(scriptHash, status, sequence);
+        notifier.discardScriptHash(scriptHash, sequence);
     }
 
     public void unsubscribeScriptHash(String scriptHash) {
@@ -271,8 +297,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         notifier.notify(() -> notificationService.notifyHeaders(electrumBlockHeader));
     }
 
-    void notifyScriptHash(String scriptHash, String status) {
-        notifier.notifyScriptHash(scriptHash, status);
+    void notifyScriptHash(String scriptHash, String status, long sequence) {
+        notifier.notifyScriptHash(scriptHash, status, sequence);
     }
 
     /**
@@ -362,24 +388,20 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         log.error("Uncaught exception in thread " + t.getName(), e);
     }
 
-    public static class ReadRunnable implements Runnable {
-        private final ElectrumTransport electrumTransport;
+    /**
+     * Reads the backend connection until it ends. If it was lost (including being closed by a request timeout) rather than
+     * closed with the session, the client is disconnected: its subscriptions live on the lost connection, and a disconnected
+     * wallet reconnects and resubscribes, whereas one left connected would silently stop receiving notifications.
+     */
+    private void readBackend() {
+        backendTransport.readInputLoop();
 
-        public ReadRunnable(ElectrumTransport electrumTransport) {
-            this.electrumTransport = electrumTransport;
-        }
-
-        @Override
-        public void run() {
-            try {
-                electrumTransport.readInputLoop();
-
-                if(electrumTransport.getLastException() != null && !electrumTransport.isClosed()) {
-                    log.error("Connection to Electrum server lost", electrumTransport.getLastException());
-                }
-            } catch(Exception e) {
-                log.debug("Read thread terminated", e);
-            }
+        if(!backendTransport.isClosed()) {
+            Exception cause = backendTransport.getLastException();
+            log.warn("Connection to backend Electrum server lost" + (cause == null ? "" : " (" + cause.getMessage() + ")") + ", disconnecting client " + clientSocket.getRemoteSocketAddress());
+            //abortive, as the notifier is still open and may start a write to a client that is not reading at any moment
+            //(isDelivering() is only reliable after the notifier is closed); unsent data does not matter when disconnecting
+            closeClientSocket(true);
         }
     }
 }

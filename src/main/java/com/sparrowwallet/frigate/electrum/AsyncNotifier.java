@@ -5,8 +5,11 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
 /**
@@ -21,6 +24,10 @@ import java.util.function.BiConsumer;
  * Pending statuses are also checked against the subscription count plus queueSize, but only as a defensive bound: they are
  * for subscribed scripthashes, as statuses of unsubscribed scripthashes are discarded, and any queued in a race with an
  * unsubscribe are skipped at delivery.
+ *
+ * While a subscribe request for a scripthash is in progress, its statuses are held back until the response has been written
+ * to the client (see hold()). Statuses read from the backend before the subscribe response are superseded by it and discarded;
+ * those read after it are newer, and must reach the client after the response, not before.
  */
 public class AsyncNotifier {
     private static final Logger log = LoggerFactory.getLogger(AsyncNotifier.class);
@@ -33,8 +40,9 @@ public class AsyncNotifier {
     private final BiConsumer<String, String> scriptHashWriter;
     private final Runnable overflowHandler;
 
-    private final LinkedHashMap<String, String> pendingStatus = new LinkedHashMap<>();
+    private final LinkedHashMap<String, PendingStatus> pendingStatus = new LinkedHashMap<>();
     private final ArrayDeque<Runnable> otherNotifications = new ArrayDeque<>();
+    private final Set<String> held = new HashSet<>();
     private boolean closed;
     private volatile boolean delivering;
     private Thread thread;
@@ -58,13 +66,16 @@ public class AsyncNotifier {
         }
     }
 
-    public void notifyScriptHash(String scriptHash, String status) {
+    /**
+     * @param sequence the backend read sequence of the notification carrying this status, see ElectrumTransport.getReadSequence()
+     */
+    public void notifyScriptHash(String scriptHash, String status, long sequence) {
         boolean overflowed;
         synchronized(this) {
             if(closed) {
                 return;
             }
-            pendingStatus.put(scriptHash, status);
+            pendingStatus.put(scriptHash, new PendingStatus(status, sequence));
             overflowed = pendingStatus.size() > scriptHashSubscriptions.size() + queueSize;
             notifyAll();
         }
@@ -100,12 +111,40 @@ public class AsyncNotifier {
     }
 
     /**
+     * Discards a pending status that is older than the backend message with the given read sequence. Used when the subscribe
+     * response for a scripthash is recorded: a status read before that response is superseded by it, and delivering it after
+     * the response would leave the client with an out of date status, while a status read after the response is newer and kept.
+     */
+    public synchronized void discardScriptHash(String scriptHash, long beforeSequence) {
+        PendingStatus pending = pendingStatus.get(scriptHash);
+        if(pending != null && pending.sequence() < beforeSequence) {
+            pendingStatus.remove(scriptHash);
+        }
+    }
+
+    /**
+     * Holds back statuses for a scripthash whose subscribe request is in progress, until releaseHeld() is called once the
+     * response to the client request containing it has been written.
+     */
+    public synchronized void hold(String scriptHash) {
+        held.add(scriptHash);
+    }
+
+    public synchronized void releaseHeld() {
+        if(!held.isEmpty()) {
+            held.clear();
+            notifyAll();
+        }
+    }
+
+    /**
      * Stops delivery promptly: the drain thread wakes and exits, and undelivered notifications are discarded.
      */
     public synchronized void close() {
         closed = true;
         pendingStatus.clear();
         otherNotifications.clear();
+        held.clear();
         notifyAll();
     }
 
@@ -151,7 +190,7 @@ public class AsyncNotifier {
             String scriptHash = null;
             String status = null;
             synchronized(this) {
-                while(!closed && pendingStatus.isEmpty() && otherNotifications.isEmpty()) {
+                while(!closed && otherNotifications.isEmpty() && !hasDeliverableStatus()) {
                     try {
                         wait();
                     } catch(InterruptedException e) {
@@ -165,9 +204,9 @@ public class AsyncNotifier {
                 if(!otherNotifications.isEmpty()) {
                     notification = otherNotifications.poll();
                 } else {
-                    Map.Entry<String, String> pending = pendingStatus.pollFirstEntry();
+                    Map.Entry<String, PendingStatus> pending = pollDeliverableStatus();
                     scriptHash = pending.getKey();
-                    status = pending.getValue();
+                    status = pending.getValue().status();
                     if(!scriptHashSubscriptions.isSubscribed(scriptHash)) {
                         //queued in a race with an unsubscribe, after its discard
                         continue;
@@ -189,4 +228,37 @@ public class AsyncNotifier {
             }
         }
     }
+
+    private boolean hasDeliverableStatus() {
+        if(held.isEmpty()) {
+            return !pendingStatus.isEmpty();
+        }
+        for(String scriptHash : pendingStatus.keySet()) {
+            if(!held.contains(scriptHash)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Removes and returns the oldest pending status that is not held. Held scripthashes are few (those in one client request),
+     * so skipping past them is cheap.
+     */
+    private Map.Entry<String, PendingStatus> pollDeliverableStatus() {
+        if(held.isEmpty()) {
+            return pendingStatus.pollFirstEntry();
+        }
+        Iterator<Map.Entry<String, PendingStatus>> iter = pendingStatus.entrySet().iterator();
+        while(iter.hasNext()) {
+            Map.Entry<String, PendingStatus> entry = iter.next();
+            if(!held.contains(entry.getKey())) {
+                iter.remove();
+                return entry;
+            }
+        }
+        throw new IllegalStateException("No deliverable status");
+    }
+
+    private record PendingStatus(String status, long sequence) {}
 }
