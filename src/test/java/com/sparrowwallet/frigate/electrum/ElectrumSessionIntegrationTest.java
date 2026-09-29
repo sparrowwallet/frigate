@@ -46,7 +46,14 @@ public class ElectrumSessionIntegrationTest {
         config.getLimits().setMaxRequestBytes(MAX_REQUEST_BYTES);
         config.getLimits().setMaxBatchSize(MAX_BATCH_SIZE);
         Config.setInstance(config);
+        startServer();
+    }
 
+    /** Starts a server, reading the current config; a test changing limits read at startup restarts it. */
+    private void startServer() {
+        if(server != null) {
+            server.stop();
+        }
         server = new ElectrumServerRunnable(null, null, new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), null, null);
         Thread.ofVirtual().name("TestElectrumServer").start(server);
     }
@@ -303,6 +310,30 @@ public class ElectrumSessionIntegrationTest {
         assertTrue(error.path("id").isNull());
         //the session continues
         assertTrue(client.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
+    }
+
+    @Test
+    public void connectionsBeyondGlobalCapAreRefused() throws Exception {
+        Config.get().getLimits().setMaxConnections(2);
+        startServer();
+        TestElectrumClient first = connectClient();
+        connectClient();
+
+        //refused without a response: the connection is simply closed
+        TestElectrumClient refused = new TestElectrumClient(server.getTcpLocalPort());
+        clients.add(refused);
+        refused.send("server.version", "TestWallet", "1.4");
+        assertTrue(refused.awaitDisconnect(5, TimeUnit.SECONDS));
+        assertNull(refused.pollResponse(0, TimeUnit.MILLISECONDS));
+        assertEquals(2, server.getSessions().size());
+        assertEquals(2, backend.getOpenConnections().size());
+
+        //a slot frees when a session ends
+        first.close();
+        await(() -> server.getSessions().size() == 1 && server.getConnectionGate().getConnectionCount() == 1, "session to end");
+        TestElectrumClient admitted = connectClient();
+        assertTrue(admitted.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
+        assertEquals(2, server.getConnectionGate().getConnectionCount());
     }
 
     @Test

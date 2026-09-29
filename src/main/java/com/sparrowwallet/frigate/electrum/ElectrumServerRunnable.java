@@ -3,6 +3,7 @@ package com.sparrowwallet.frigate.electrum;
 import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.IndexQuerier;
+import com.sparrowwallet.frigate.io.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,12 +15,15 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 public class ElectrumServerRunnable implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumServerRunnable.class);
@@ -32,6 +36,8 @@ public class ElectrumServerRunnable implements Runnable {
     private final InetSocketAddress tcpBind;
     private final InetSocketAddress sslBind;
     private final List<ServerSocket> serverSockets = new ArrayList<>();
+    private final ConnectionGate connectionGate;
+    private final Set<RequestHandler> sessions = ConcurrentHashMap.newKeySet();
 
     protected volatile boolean stopped = false;
     protected ExecutorService requestPool = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("ElectrumServerRequest-", 0).factory());
@@ -41,6 +47,8 @@ public class ElectrumServerRunnable implements Runnable {
         this.indexQuerier = indexQuerier;
         this.tcpBind = tcpBind;
         this.sslBind = sslBind;
+        Config.LimitsConfig limits = Config.get().getLimits();
+        this.connectionGate = new ConnectionGate(limits.getMaxConnections(), limits.getMaxConnectionsPerIp());
 
         if(tcpBind == null && sslBind == null) {
             throw new ConfigurationException("At least one of tcp or ssl must be enabled under [server] in config.toml");
@@ -106,9 +114,61 @@ public class ElectrumServerRunnable implements Runnable {
                 log.error("Error accepting client connection on port " + serverSocket.getLocalPort(), e);
                 return;
             }
-            RequestHandler requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier);
-            this.requestPool.execute(requestHandler);
+
+            ConnectionGate.IpKey ipKey = connectionGate.tryAcquire(clientSocket.getInetAddress());
+            if(ipKey == null) {
+                //refused without a response, as writing one would itself be an amplification vector
+                log.debug("Refusing connection from " + clientSocket.getRemoteSocketAddress() + ": connection limit reached");
+                closeQuietly(clientSocket);
+                continue;
+            }
+
+            try {
+                this.requestPool.execute(() -> runSession(clientSocket, ipKey));
+            } catch(RejectedExecutionException e) {
+                connectionGate.release(ipKey);
+                closeQuietly(clientSocket);
+            }
         }
+    }
+
+    /**
+     * Runs a client session, releasing its connection slot and removing it from the live sessions however it ends.
+     */
+    private void runSession(Socket clientSocket, ConnectionGate.IpKey ipKey) {
+        RequestHandler requestHandler = null;
+        try {
+            requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier);
+            sessions.add(requestHandler);
+            requestHandler.run();
+        } catch(RuntimeException e) {
+            log.error("Error in session for client " + clientSocket.getRemoteSocketAddress(), e);
+            closeQuietly(clientSocket);
+        } finally {
+            if(requestHandler != null) {
+                sessions.remove(requestHandler);
+            }
+            connectionGate.release(ipKey);
+        }
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch(IOException e) {
+            //ignore
+        }
+    }
+
+    /**
+     * @return the sessions currently connected
+     */
+    public Set<RequestHandler> getSessions() {
+        return Collections.unmodifiableSet(sessions);
+    }
+
+    public ConnectionGate getConnectionGate() {
+        return connectionGate;
     }
 
     public synchronized void stop() {
