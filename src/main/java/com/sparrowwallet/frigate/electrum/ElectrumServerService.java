@@ -534,11 +534,12 @@ public class ElectrumServerService {
         }
 
         int startHeight = effectiveStart;
-        requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress, labelSet, startHeight);
+        SilentPaymentAddressSubscription subscription = requestHandler.subscribeSilentPaymentsAddress(silentPaymentScanAddress, labelSet, startHeight);
 
         requestHandler.runAfterResponse(() -> {
-            SilentPaymentAddressSubscription subscription = requestHandler.getSilentPaymentsAddressSubscription(silentPaymentScanAddress.toString());
-            if(subscription == null) {
+            //scan only if this subscribe's subscription is still the current one: when a batch subscribes the same address repeatedly,
+            //each replaces the last, and only the final one scans, rather than each starting its own full scan of the index
+            if(requestHandler.getSilentPaymentsAddressSubscription(silentPaymentScanAddress.toString()) != subscription) {
                 return;
             }
             subscription.setActive(true);

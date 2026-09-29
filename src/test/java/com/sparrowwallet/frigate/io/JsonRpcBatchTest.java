@@ -43,10 +43,32 @@ public class JsonRpcBatchTest {
     }
 
     @Test
+    public void summaryCountsSilentPaymentsSubscribes() {
+        String subscribe = "{\"jsonrpc\":\"2.0\",\"id\":1,\"params\":{\"method\":\"blockchain.silentpayments.subscribe\"},\"method\":\"blockchain.silentpayments.subscribe\"}";
+        String other = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"blockchain.scripthash.subscribe\",\"params\":[\"blockchain.silentpayments.subscribe\"]}";
+
+        assertEquals(new JsonRpcBatch.Summary(-1, 1), JsonRpcBatch.summarize(subscribe, 10));
+        //the method name appearing only in params does not count
+        assertEquals(new JsonRpcBatch.Summary(-1, 0), JsonRpcBatch.summarize(other, 10));
+        assertEquals(new JsonRpcBatch.Summary(4, 2), JsonRpcBatch.summarize("[" + subscribe + "," + other + ",[1]," + subscribe + "]", 10));
+    }
+
+    @Test
+    public void summaryCost() {
+        assertEquals(1, new JsonRpcBatch.Summary(-1, 0).cost(25));
+        assertEquals(25, new JsonRpcBatch.Summary(-1, 1).cost(25));
+        assertEquals(1, new JsonRpcBatch.Summary(0, 0).cost(25));
+        assertEquals(10, new JsonRpcBatch.Summary(10, 0).cost(25));
+        //8 ordinary requests and 2 silent payments subscribes
+        assertEquals(8 + 2 * 25, new JsonRpcBatch.Summary(10, 2).cost(25));
+    }
+
+    @Test
     public void malformedJsonIsLeftToTheServer() {
         assertEquals(-1, JsonRpcBatch.countItems("[{\"id\":1,", 10));
         assertEquals(-1, JsonRpcBatch.countItems("[1,2", 10));
         assertEquals(-1, JsonRpcBatch.countItems("not json", 10));
         assertEquals(-1, JsonRpcBatch.countItems("", 10));
+        assertEquals(new JsonRpcBatch.Summary(-1, 0), JsonRpcBatch.summarize("{\"method\":\"blockchain.silentpayments.subscribe\",", 10));
     }
 }

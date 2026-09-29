@@ -15,6 +15,7 @@ import com.sparrowwallet.frigate.io.BoundedLineReader;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.JsonRpcBatch;
 import com.sparrowwallet.frigate.io.LineTooLongException;
+import com.sparrowwallet.frigate.io.TokenBucket;
 import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     //client that keeps its connection open can hold the session, and the budget the data read from one that keeps sending
     private static final long OVERSIZED_REQUEST_DRAIN_NANOS = TimeUnit.SECONDS.toNanos(2);
     private static final long OVERSIZED_REQUEST_DRAIN_BYTES = 16 * 1024 * 1024;
+    //each silent payments subscribe starts a scan of the index, so it costs as many tokens as this many ordinary requests
+    private static final int SILENT_PAYMENTS_SUBSCRIBE_COST = 25;
     private static final String BATCH_TOO_LARGE = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"batch too large\"},\"id\":null}";
     private static final String PARSE_ERROR = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":\"Parse error\"},\"id\":null}";
     private final Socket clientSocket;
@@ -55,6 +58,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final ConnectionGate connectionGate;
     private final ConnectionGate.IpKey ipKey;
     private final int maxSubscriptionsPerSession;
+    private final TokenBucket requestBucket;
     private final HeadersDispatcher headersDispatcher;
 
     private boolean connected;
@@ -78,7 +82,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         this.clientSocket = clientSocket;
         this.connectionGate = connectionGate;
         this.ipKey = ipKey;
-        this.maxSubscriptionsPerSession = Config.get().getLimits().getMaxSubscriptionsPerSession();
+        Config.LimitsConfig limits = Config.get().getLimits();
+        this.maxSubscriptionsPerSession = limits.getMaxSubscriptionsPerSession();
+        this.requestBucket = new TokenBucket(limits.getRequestTokens(), limits.getRequestTokensPerSecond());
         this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
         Config.ServerConfig serverConfig = Config.get().getServer();
         Server backendServer = serverConfig.getBackendElectrumServerObj();
@@ -146,10 +152,19 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                 }
 
                 //reject an oversized batch without processing any of it; the session continues, as the stream is intact
-                if(JsonRpcBatch.countItems(request, maxBatchSize) > maxBatchSize) {
+                JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, maxBatchSize);
+                if(summary.items() > maxBatchSize) {
                     log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
                     writeLine(BATCH_TOO_LARGE);
                     continue;
+                }
+
+                //pace requests: a burst beyond the bucket's capacity is delayed, not rejected
+                try {
+                    requestBucket.acquire(summary.cost(SILENT_PAYMENTS_SUBSCRIBE_COST));
+                } catch(InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
 
                 try {
@@ -347,12 +362,18 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         return scriptHashSubscriptions.isSubscribed(scriptHash);
     }
 
-    public void subscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress, Set<Integer> labelSet, int startHeight) {
+    /**
+     * Replaces any existing subscription for the address, cancelling its in-flight scans.
+     * @return the new subscription
+     */
+    public SilentPaymentAddressSubscription subscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress, Set<Integer> labelSet, int startHeight) {
         SilentPaymentAddressSubscription previous = silentPaymentsAddressesSubscribed.get(silentPaymentsScanAddress.toString());
         if(previous != null) {
             previous.invalidateInFlightScans();
         }
-        silentPaymentsAddressesSubscribed.put(silentPaymentsScanAddress.toString(), new SilentPaymentAddressSubscription(silentPaymentsScanAddress, labelSet, startHeight));
+        SilentPaymentAddressSubscription subscription = new SilentPaymentAddressSubscription(silentPaymentsScanAddress, labelSet, startHeight);
+        silentPaymentsAddressesSubscribed.put(silentPaymentsScanAddress.toString(), subscription);
+        return subscription;
     }
 
     public void unsubscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress) {

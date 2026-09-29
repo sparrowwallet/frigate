@@ -52,6 +52,7 @@ public class RequestHandlerTest {
     private TestElectrumClient client;
     private RequestHandler handler;
     private Thread handlerThread;
+    private final RecordingIndexQuerier indexQuerier = new RecordingIndexQuerier();
 
     @BeforeAll
     public static void createCertificate() throws Exception {
@@ -108,7 +109,7 @@ public class RequestHandlerTest {
         client = new TestElectrumClient(clientSocket, listener.getLocalPort(), receiveBufferSize);
         Socket serverSide = listener.accept();
 
-        handler = new RequestHandler(serverSide, null, null, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()));
+        handler = new RequestHandler(serverSide, null, indexQuerier, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()));
         handlerThread = Thread.ofVirtual().name("TestRequestHandler").start(handler);
         client.request("server.version", "TestWallet", "1.4");
     }
@@ -188,6 +189,39 @@ public class RequestHandlerTest {
     }
 
     @Test
+    public void batchOfSubscribesToOneAddressStartsOneScan() throws Exception {
+        connect(false, 0);
+        int batchSize = 5;
+        List<String> requests = IntStream.range(0, batchSize).mapToObj(i -> "{\"jsonrpc\":\"2.0\",\"id\":" + (100 + i)
+                + ",\"method\":\"blockchain.silentpayments.subscribe\",\"params\":[\"" + SCAN_PRIVATE_KEY + "\",\"" + SPEND_PUBLIC_KEY + "\"," + (1000 - i) + "]}").toList();
+
+        client.sendRaw("[" + String.join(",", requests) + "]");
+        client.awaitResponse(100);
+        Thread.sleep(200);
+
+        //only the last subscribe, which replaced the others, scans: from the lowest start height of the batch
+        assertEquals(1, indexQuerier.scans.size());
+        RecordingIndexQuerier.Scan scan = indexQuerier.scans.getFirst();
+        assertEquals(1000 - batchSize + 1, scan.startHeight());
+        assertSame(handler.getSilentPaymentsAddressSubscription(scanAddress().toString()), scan.subscription());
+        assertTrue(scan.subscription().isActive());
+    }
+
+    @Test
+    public void separateSubscribesToOneAddressEachScan() throws Exception {
+        connect(false, 0);
+
+        for(int i = 0; i < 2; i++) {
+            client.request("blockchain.silentpayments.subscribe", SCAN_PRIVATE_KEY, SPEND_PUBLIC_KEY);
+        }
+        Thread.sleep(200);
+
+        //the second replaces the first, whose scan it cancels, as before
+        assertEquals(2, indexQuerier.scans.size());
+        assertNotSame(indexQuerier.scans.get(0).subscription(), indexQuerier.scans.get(1).subscription());
+    }
+
+    @Test
     public void statusQueuedBeforeUnsubscribeIsNotDelivered() throws Exception {
         connect(false, 4096);
         String scriptHash = "a0".repeat(32);
@@ -221,6 +255,23 @@ public class RequestHandlerTest {
     public void slowClientIsDisconnectedOverTls() throws Exception {
         //an SSL socket's graceful close waits without limit for the blocked writer's lock, so this hangs without an abortive close
         assertSlowClientDisconnected(true);
+    }
+
+    /** Records history scans instead of querying an index. */
+    private static class RecordingIndexQuerier extends com.sparrowwallet.frigate.index.IndexQuerier {
+        private final List<Scan> scans = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        RecordingIndexQuerier() {
+            super(null, null);
+        }
+
+        @Override
+        public void startHistoryScan(SilentPaymentScanAddress scanAddress, Integer startHeight, Integer endHeight, SilentPaymentAddressSubscription subscription,
+                                     java.lang.ref.WeakReference<com.sparrowwallet.frigate.SubscriptionStatus> subscriptionStatusRef, boolean isHistorical) {
+            scans.add(new Scan(startHeight, subscription));
+        }
+
+        record Scan(Integer startHeight, SilentPaymentAddressSubscription subscription) {}
     }
 
     private void assertSlowClientDisconnected(boolean ssl) throws Exception {

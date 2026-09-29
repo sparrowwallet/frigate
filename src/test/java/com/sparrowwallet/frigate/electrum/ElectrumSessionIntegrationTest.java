@@ -397,6 +397,34 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void requestsBeyondBucketAreDelayedNotRejected() throws Exception {
+        Config.get().getLimits().setRequestTokens(5);
+        Config.get().getLimits().setRequestTokensPerSecond(10);
+        TestElectrumClient paced = connectClient();
+        TestElectrumClient other = connectClient();
+
+        //the bucket holds at most 5 tokens when the requests start (server.version took one, which may have refilled while the second
+        //client connected), so at least 19 of the 24 requests wait for refills: at least 1.9 seconds at 10 per second, asserted
+        //below as 1.8 seconds to allow for timer granularity
+        long start = System.nanoTime();
+        List<Integer> ids = new ArrayList<>();
+        for(int i = 0; i < 24; i++) {
+            ids.add(paced.send("blockchain.scripthash.get_history", scriptHash(i)));
+        }
+
+        //another session has its own bucket, so it is not slowed
+        long otherStart = System.nanoTime();
+        assertTrue(other.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - otherStart) < 1000);
+
+        for(int id : ids) {
+            assertTrue(paced.awaitResponse(id).path("result").isArray());
+        }
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        assertTrue(elapsedMillis >= 1800 && elapsedMillis < 5000, "elapsed " + elapsedMillis + "ms");
+    }
+
+    @Test
     public void idleClientIsDisconnected() throws Exception {
         Config.get().getLimits().setSessionTimeoutSeconds(1);
         TestElectrumClient client = connectClient();
