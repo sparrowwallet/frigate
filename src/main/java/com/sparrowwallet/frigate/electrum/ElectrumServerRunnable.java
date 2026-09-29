@@ -4,6 +4,7 @@ import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.frigate.io.BackendTls;
+import com.google.common.util.concurrent.Uninterruptibles;
 import com.sparrowwallet.drongo.Network;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.io.Config;
@@ -37,6 +38,8 @@ import java.util.concurrent.TimeUnit;
 public class ElectrumServerRunnable implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumServerRunnable.class);
     private static final int LISTEN_BACKLOG = 50;
+    private static final Duration FORCE_CLOSE_WAIT = Duration.ofSeconds(2);
+    private static final long SHUTDOWN_POLL_MILLIS = 20;
 
     private static final Set<String> ALLOWED_TLS_PROTOCOLS = Set.of("TLSv1.2", "TLSv1.3");
 
@@ -173,6 +176,12 @@ public class ElectrumServerRunnable implements Runnable {
         try {
             requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier, connectionGate, ipKey, backendTls);
             sessions.add(requestHandler);
+            //a session accepted just before shutdown may join after shutdown has gone through the live sessions: it is not started,
+            //and its socket, which nothing has written to yet, is closed here
+            if(stopped) {
+                closeQuietly(clientSocket);
+                return;
+            }
             requestHandler.run();
         } catch(RuntimeException e) {
             log.error("Error in session for client " + clientSocket.getRemoteSocketAddress(), e);
@@ -191,6 +200,41 @@ public class ElectrumServerRunnable implements Runnable {
         } catch(IOException e) {
             //ignore
         }
+    }
+
+    /**
+     * Shuts the server down gracefully: listeners close so no new sessions start, idle sessions close at once, and sessions handling
+     * a request finish it before closing. Sessions still running after the drain deadline are closed abortively. Each session's
+     * backend connection closes with it.
+     */
+    public void shutdown(Duration drain) {
+        stop();
+        for(RequestHandler session : sessions) {
+            session.beginShutdown();
+        }
+
+        if(!awaitSessionsEnded(drain)) {
+            log.info("Closing " + sessions.size() + " sessions still running after the " + drain.toSeconds() + "s shutdown drain");
+            for(RequestHandler session : sessions) {
+                session.forceClose();
+            }
+            awaitSessionsEnded(FORCE_CLOSE_WAIT);
+        }
+    }
+
+    /**
+     * Waits for the live sessions to end. Shutdown is already bounded, so an interrupt does not cut the wait short (which would skip
+     * the wait after forced closes); the interrupt is restored for the caller.
+     */
+    private boolean awaitSessionsEnded(Duration timeout) {
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while(!sessions.isEmpty()) {
+            if(System.nanoTime() >= deadline) {
+                return false;
+            }
+            Uninterruptibles.sleepUninterruptibly(SHUTDOWN_POLL_MILLIS, TimeUnit.MILLISECONDS);
+        }
+        return true;
     }
 
     /**

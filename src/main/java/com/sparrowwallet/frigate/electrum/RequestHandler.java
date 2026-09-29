@@ -60,6 +60,10 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final ConnectionGate.IpKey ipKey;
     private final int maxSubscriptionsPerSession;
     private final TokenBucket requestBucket;
+    private final Object shutdownLock = new Object();
+    private boolean shuttingDown;
+    private boolean handlingRequest;
+    private volatile Thread requestThread;
     private final HeadersDispatcher headersDispatcher;
 
     private boolean connected;
@@ -112,6 +116,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     }
 
     public void run() {
+        requestThread = Thread.currentThread();
         Frigate.getEventBus().register(this);
         this.connected = true;
         notifier.start();
@@ -126,9 +131,12 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             OutputStream output = clientSocket.getOutputStream();
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
 
-            startBackendSession();
+            //a session that began shutting down while starting needs no backend connection
+            if(!isShuttingDown()) {
+                startBackendSession();
+            }
 
-            while(true) {
+            while(!isShuttingDown()) {
                 postResponseTasks.clear();
 
                 String request;
@@ -143,43 +151,19 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                     rejectOversizedRequest();
                     break;
                 }
-                if(request == null) {
+                if(request == null || !startHandling()) {
+                    //a request read as shutdown began is dropped, as if the connection had closed a moment earlier
                     break;
                 }
 
-                // Reject requests with null bytes or other control characters
-                if(request.indexOf(0) >= 0 || request.chars().anyMatch(c -> c < 32 && c != '\t' && c != '\r' && c != '\n')) {
-                    log.warn("Rejecting malformed request with control characters");
-                    writeLine(PARSE_ERROR);
-                    continue;
-                }
-
-                //reject an oversized batch without processing any of it; the session continues, as the stream is intact
-                JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, maxBatchSize);
-                if(summary.items() > maxBatchSize) {
-                    log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
-                    writeLine(BATCH_TOO_LARGE);
-                    continue;
-                }
-
-                //pace requests: a burst beyond the bucket's capacity is delayed, not rejected
                 try {
-                    requestBucket.acquire(summary.cost(SILENT_PAYMENTS_SUBSCRIBE_COST));
+                    handleRequest(request, maxBatchSize);
                 } catch(InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
-                }
-
-                try {
-                    String response = rpcServer.handle(request, electrumServerService);
-                    writeLine(response);
                 } finally {
-                    //statuses held for subscribes in this request can follow the response now it has been written
-                    heldForResponse.forEach(notifier::release);
-                    heldForResponse.clear();
+                    finishHandling();
                 }
-
-                runPostResponseTasks();
             }
         } catch(IOException e) {
             log.debug("Could not communicate with client socket: {}", e.getMessage());
@@ -197,6 +181,113 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             }
 
             closeClientSocket(notifier.isDelivering());
+        }
+    }
+
+    /**
+     * Handles one request line: rejects it if it is malformed or an oversized batch, and otherwise paces it and writes its response.
+     */
+    private void handleRequest(String request, int maxBatchSize) throws InterruptedException {
+        //reject requests with null bytes or other control characters
+        if(request.indexOf(0) >= 0 || request.chars().anyMatch(c -> c < 32 && c != '\t' && c != '\r' && c != '\n')) {
+            log.warn("Rejecting malformed request with control characters");
+            writeLine(PARSE_ERROR);
+            return;
+        }
+
+        //reject an oversized batch without processing any of it; the session continues, as the stream is intact
+        JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, maxBatchSize);
+        if(summary.items() > maxBatchSize) {
+            log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
+            writeLine(BATCH_TOO_LARGE);
+            return;
+        }
+
+        //pace requests: a burst beyond the bucket's capacity is delayed, not rejected
+        requestBucket.acquire(summary.cost(SILENT_PAYMENTS_SUBSCRIBE_COST));
+
+        try {
+            String response = rpcServer.handle(request, electrumServerService);
+            writeLine(response);
+        } finally {
+            //statuses held for subscribes in this request can follow the response now it has been written
+            heldForResponse.forEach(notifier::release);
+            heldForResponse.clear();
+        }
+
+        runPostResponseTasks();
+    }
+
+    /**
+     * Begins shutting the session down gracefully: an idle session, waiting for its next request, is closed at once, while one
+     * handling a request finishes it, writing the response, and then ends. The session's normal teardown follows either way.
+     *
+     * Called on the thread shutting the server down, so it never closes a socket itself: an SSL close sends close_notify, which can
+     * block without limit behind another write in progress or on a client that has stopped reading. The close runs on its own
+     * thread instead, and a close that never completes is bounded by the drain deadline and forceClose().
+     */
+    public void beginShutdown() {
+        boolean idle;
+        synchronized(shutdownLock) {
+            shuttingDown = true;
+            idle = !handlingRequest;
+        }
+        if(idle) {
+            Thread.ofVirtual().name("ElectrumShutdown-" + System.identityHashCode(this)).start(() -> {
+                //stop notifications first: a normal close of an SSL socket would wait without limit for a notification write in progress
+                notifier.close();
+                closeClientSocket(notifier.isDelivering());
+            });
+        }
+    }
+
+    /**
+     * Ends the session at once, abortively, as when it has not finished within the shutdown drain deadline. Closing the client socket
+     * alone would not end a request thread waiting for the backend or for pacing tokens, so the backend connection is closed and the
+     * request thread interrupted too; the session's normal teardown then follows.
+     *
+     * As with beginShutdown(), the closes run on their own thread, as even an abortive SSL close can block sending close_notify to a
+     * peer that has stopped reading. Interrupting the request thread does not block, and also ends any socket I/O it is blocked in.
+     */
+    public void forceClose() {
+        synchronized(shutdownLock) {
+            shuttingDown = true;
+        }
+        Thread thread = requestThread;
+        if(thread != null) {
+            thread.interrupt();
+        }
+        Thread.ofVirtual().name("ElectrumForceClose-" + System.identityHashCode(this)).start(() -> {
+            notifier.close();
+            closeClientSocket(true);
+            if(backendSession != null) {
+                backendSession.close();
+            }
+        });
+    }
+
+    private boolean isShuttingDown() {
+        synchronized(shutdownLock) {
+            return shuttingDown;
+        }
+    }
+
+    /**
+     * @return false if the session is shutting down, and the request just read should be dropped
+     */
+    private boolean startHandling() {
+        synchronized(shutdownLock) {
+            if(shuttingDown) {
+                return false;
+            }
+            handlingRequest = true;
+            return true;
+        }
+    }
+
+    private void finishHandling() {
+        synchronized(shutdownLock) {
+            handlingRequest = false;
         }
     }
 

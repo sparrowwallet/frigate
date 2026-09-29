@@ -485,6 +485,7 @@ public class Config {
         public static final int DEFAULT_BACKEND_RECONNECT_MAX_BACKOFF_SECONDS = 60;
         public static final int DEFAULT_BACKEND_PING_INTERVAL_SECONDS = 60;
         public static final int DEFAULT_SSL_RELOAD_SECONDS = 300;
+        public static final int DEFAULT_SHUTDOWN_DRAIN_SECONDS = 10;
 
         private List<String> host;
         private String tcp;
@@ -498,6 +499,7 @@ public class Config {
         private Integer sslReloadSeconds;
         private Boolean healthStatsEnabled;
         private Integer adminPort;
+        private Integer shutdownDrainSeconds;
         private Boolean backendSslVerify;
         private String backendSslCertFile;
 
@@ -739,6 +741,17 @@ public class Config {
         @JsonIgnore
         public File getBackendSslCertFileObj() {
             return backendSslCertFile == null || backendSslCertFile.isBlank() ? null : resolveFrigateDirPath(backendSslCertFile, backendSslCertFile);
+        }
+
+        /**
+         * @return how long shutdown waits for sessions to finish the request they are handling before closing them
+         */
+        public int getShutdownDrainSeconds() {
+            return shutdownDrainSeconds != null && shutdownDrainSeconds >= 0 ? shutdownDrainSeconds : DEFAULT_SHUTDOWN_DRAIN_SECONDS;
+        }
+
+        public void setShutdownDrainSeconds(Integer shutdownDrainSeconds) {
+            this.shutdownDrainSeconds = shutdownDrainSeconds;
         }
 
         /**

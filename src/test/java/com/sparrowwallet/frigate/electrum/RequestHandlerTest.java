@@ -258,6 +258,44 @@ public class RequestHandlerTest {
         assertSlowClientDisconnected(true);
     }
 
+    @Test
+    public void shutdownCallsReturnEvenWhenClosingTheClientHangs() throws Exception {
+        //a close that blocks, as an SSL close sending close_notify can behind a blocked write or to a client that has stopped reading
+        java.util.concurrent.CountDownLatch releaseClose = new java.util.concurrent.CountDownLatch(1);
+        listener = new ServerSocket(0, 1, InetAddress.getLoopbackAddress()) {
+            @Override
+            public Socket accept() throws IOException {
+                Socket socket = new Socket() {
+                    @Override
+                    public synchronized void close() throws IOException {
+                        try {
+                            releaseClose.await();
+                        } catch(InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        super.close();
+                    }
+                };
+                implAccept(socket);
+                return socket;
+            }
+        };
+        client = new TestElectrumClient(new Socket(), listener.getLocalPort(), 0);
+        Socket serverSide = listener.accept();
+        handler = new RequestHandler(serverSide, null, indexQuerier, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()),
+                com.sparrowwallet.frigate.io.BackendTls.trustAll());
+        handlerThread = Thread.ofVirtual().name("TestRequestHandler").start(handler);
+        client.request("server.version", "TestWallet", "1.4");
+
+        //the shutdown thread is not held up by the hanging close of an idle session, nor by a forced close
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> handler.beginShutdown());
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> handler.forceClose());
+
+        releaseClose.countDown();
+        assertTrue(handlerThread.join(Duration.ofSeconds(5)));
+        assertFalse(handler.isConnected());
+    }
+
     /** Records history scans instead of querying an index. */
     private static class RecordingIndexQuerier extends com.sparrowwallet.frigate.index.IndexQuerier {
         private final List<Scan> scans = new java.util.concurrent.CopyOnWriteArrayList<>();

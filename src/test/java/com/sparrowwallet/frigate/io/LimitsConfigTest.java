@@ -98,6 +98,14 @@ public class LimitsConfigTest {
     }
 
     @Test
+    public void shutdownDrainSecondsIsParsed() throws Exception {
+        assertEquals(Config.ServerConfig.DEFAULT_SHUTDOWN_DRAIN_SECONDS, new Config().getServer().getShutdownDrainSeconds());
+        assertEquals(30, MAPPER.readValue("[server]\nshutdownDrainSeconds = 30\n", Config.class).getServer().getShutdownDrainSeconds());
+        //0 closes sessions at once
+        assertEquals(0, MAPPER.readValue("[server]\nshutdownDrainSeconds = 0\n", Config.class).getServer().getShutdownDrainSeconds());
+    }
+
+    @Test
     public void defaultConfigFileParses() throws Exception {
         try(InputStream in = Config.class.getResourceAsStream("/config.toml.default")) {
             assertNotNull(in);

@@ -32,6 +32,7 @@ connect = true
 # sslReloadSeconds = 300         # how often to check the certificate and key files, reloading them without a restart when renewed;
 #                                # 0 or less uses the default (reloading does nothing unless the files change)
 # adminPort = 50003              # loopback-only admin JSON-RPC port offering getinfo, for health checks; 0 or absent disables it
+# shutdownDrainSeconds = 10      # on shutdown, how long sessions may take to finish the request they are handling
 # healthStatsEnabled = true      # log backend and index health every 5 minutes, without counts (usage is logged hourly, per [scan] metricsEnabled)
 # backendElectrumServer = "tcp://localhost:60001"   # backend must listen on a port distinct from Frigate's tcp/ssl listeners above
 # backendRequestTimeoutSeconds = 120                # per-request timeout on each session's backend connection; expiry closes that connection

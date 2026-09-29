@@ -17,6 +17,7 @@ import com.sparrowwallet.frigate.io.Storage;
 import javax.net.ssl.SSLContext;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
+import java.time.Duration;
 import com.github.arteam.simplejsonrpc.client.exception.JsonRpcException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,6 +98,13 @@ public class Frigate {
     public void stop() {
         getLogger().info(SERVER_NAME + " shutting down...");
 
+        //the Electrum server first, so no session is still using the indexes or bitcoind as they close
+        if(electrumServer != null) {
+            electrumServer.shutdown(Duration.ofSeconds(Config.get().getServer().getShutdownDrainSeconds()));
+        }
+        if(certificateReloader != null) {
+            certificateReloader.close();
+        }
         if(blocksIndex != null) {
             blocksIndex.close();
         }
@@ -105,12 +113,6 @@ public class Frigate {
         }
         if(bitcoindClient != null) {
             bitcoindClient.stop();
-        }
-        if(electrumServer != null) {
-            electrumServer.stop();
-        }
-        if(certificateReloader != null) {
-            certificateReloader.close();
         }
         if(indexQuerier != null) {
             indexQuerier.close();

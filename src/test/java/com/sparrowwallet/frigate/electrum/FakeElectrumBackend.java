@@ -30,6 +30,7 @@ public class FakeElectrumBackend implements Closeable {
     private final List<Connection> connections = new CopyOnWriteArrayList<>();
     private final Map<String, String> statuses = new ConcurrentHashMap<>();
     private volatile boolean accepting = true;
+    private final Map<String, Long> responseDelays = new ConcurrentHashMap<>();
 
     public FakeElectrumBackend() throws IOException {
         serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
@@ -38,6 +39,11 @@ public class FakeElectrumBackend implements Closeable {
 
     public String getUrl() {
         return "tcp://" + InetAddress.getLoopbackAddress().getHostAddress() + ":" + serverSocket.getLocalPort();
+    }
+
+    /** Delays responses to the given method, as a slow backend would. */
+    public void setResponseDelay(String method, long millis) {
+        responseDelays.put(method, millis);
     }
 
     /** While not accepting, new connections are closed as soon as they are accepted, simulating a backend that is down. */
@@ -178,9 +184,17 @@ public class FakeElectrumBackend implements Closeable {
             try(BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8))) {
                 String line;
                 while((line = in.readLine()) != null) {
-                    send(respond(this, MAPPER.readTree(line)));
+                    JsonNode request = MAPPER.readTree(line);
+                    Long delay = responseDelays.get(request.path("method").asText());
+                    if(delay != null) {
+                        Thread.sleep(delay);
+                    }
+                    send(respond(this, request));
                 }
             } catch(IOException e) {
+                //closed
+            } catch(InterruptedException e) {
+                Thread.currentThread().interrupt();
                 //closed
             } finally {
                 close();
