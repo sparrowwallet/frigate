@@ -277,7 +277,9 @@ public class ElectrumServerService {
         if(electrumBackendService != null) {
             requestHandler.subscribeScriptHash(scriptHash);
             try {
-                return electrumBackendService.subscribeScriptHash(scriptHash);
+                String status = electrumBackendService.subscribeScriptHash(scriptHash);
+                requestHandler.recordScriptHashSubscribeResponse(scriptHash, status);
+                return status;
             } catch(RuntimeException e) {
                 requestHandler.unsubscribeScriptHash(scriptHash);
                 throw e;

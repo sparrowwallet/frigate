@@ -43,7 +43,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
 
     private boolean connected;
     private volatile boolean headersSubscribed;
-    private final Set<String> scriptHashesSubscribed = ConcurrentHashMap.newKeySet();
+    private final ScriptHashSubscriptions scriptHashSubscriptions = new ScriptHashSubscriptions();
     private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new ConcurrentHashMap<>();
     private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
     private final Object silentPaymentsNotificationLock = new Object();
@@ -57,7 +57,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
         Server backendServer = Config.get().getServer().getBackendElectrumServerObj();
         if(backendServer != null) {
-            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(), new BackendSubscriptionService());
+            this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(), new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash));
             this.reader = Thread.ofVirtual().name("BackendServerReadThread-" + System.identityHashCode(this)).unstarted(new ReadRunnable(backendTransport));
             reader.setUncaughtExceptionHandler(this);
         } else {
@@ -175,16 +175,20 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     }
 
     public void subscribeScriptHash(String scriptHash) {
-        scriptHashesSubscribed.add(scriptHash);
+        scriptHashSubscriptions.subscribe(scriptHash);
+    }
+
+    public void recordScriptHashSubscribeResponse(String scriptHash, String status) {
+        scriptHashSubscriptions.recordSubscribeResponse(scriptHash, status);
     }
 
     public void unsubscribeScriptHash(String scriptHash) {
-        scriptHashesSubscribed.remove(scriptHash);
+        scriptHashSubscriptions.unsubscribe(scriptHash);
     }
 
     @Override
     public boolean isScriptHashSubscribed(String scriptHash) {
-        return scriptHashesSubscribed.contains(scriptHash);
+        return scriptHashSubscriptions.isSubscribed(scriptHash);
     }
 
     public void subscribeSilentPaymentsAddress(SilentPaymentScanAddress silentPaymentsScanAddress, Set<Integer> labelSet, int startHeight) {
@@ -241,11 +245,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         notificationService.notifyHeaders(electrumBlockHeader);
     }
 
-    @Subscribe
-    public void scriptHashStatus(ScriptHashStatus scriptHashStatus) {
-        if(isScriptHashSubscribed(scriptHashStatus.scriptHash())) {
-            notificationService.notifyScriptHash(scriptHashStatus.scriptHash(), scriptHashStatus.status());
-        }
+    void notifyScriptHash(String scriptHash, String status) {
+        notificationService.notifyScriptHash(scriptHash, status);
     }
 
     /**
