@@ -497,6 +497,7 @@ public class Config {
         private Integer backendPingIntervalSeconds;
         private Integer sslReloadSeconds;
         private Boolean healthStatsEnabled;
+        private Integer adminPort;
         private Boolean backendSslVerify;
         private String backendSslCertFile;
 
@@ -738,6 +739,17 @@ public class Config {
         @JsonIgnore
         public File getBackendSslCertFileObj() {
             return backendSslCertFile == null || backendSslCertFile.isBlank() ? null : resolveFrigateDirPath(backendSslCertFile, backendSslCertFile);
+        }
+
+        /**
+         * @return the loopback port of the admin endpoint, or 0 if it is disabled (the default)
+         */
+        public int getAdminPort() {
+            return adminPort != null && adminPort > 0 ? adminPort : 0;
+        }
+
+        public void setAdminPort(Integer adminPort) {
+            this.adminPort = adminPort;
         }
 
         /**

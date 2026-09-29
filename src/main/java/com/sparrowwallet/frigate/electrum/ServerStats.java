@@ -16,6 +16,17 @@ public record ServerStats(int sessions, int distinctIps, long scriptHashSubscrip
                           boolean backendConfigured, int backendSessions, int backendConnected, long backendReconnects, long backendTimeouts,
                           Integer tipHeight, Integer indexHeight, Integer mempoolSize) {
 
+    /**
+     * @return the backend's state across sessions without counts: connected (for every session), partly disconnected or
+     * disconnected (for every session), or null if no backend is configured
+     */
+    public String backendState() {
+        if(!backendConfigured) {
+            return null;
+        }
+        return backendConnected == backendSessions ? "connected" : backendConnected == 0 ? "disconnected" : "partly disconnected";
+    }
+
     public static ServerStats collect(Collection<RequestHandler> sessions, ConnectionGate connectionGate, boolean backendConfigured, BitcoindClient bitcoindClient) {
         int count = 0;
         int silentPaymentsSubscriptions = 0;

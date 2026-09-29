@@ -69,8 +69,7 @@ public class ServerStatsLog {
     static Optional<String> formatHealth(ServerStats current, ServerStats previous, long intervalSeconds) {
         List<String> parts = new ArrayList<>();
         if(current.backendConfigured()) {
-            String state = current.backendConnected() == current.backendSessions() ? "connected"
-                    : current.backendConnected() == 0 ? "disconnected" : "partly disconnected";
+            String state = current.backendState();
             boolean reconnects = current.backendReconnects() > previous.backendReconnects();
             boolean timeouts = current.backendTimeouts() > previous.backendTimeouts();
             String events = reconnects && timeouts ? "reconnects and request timeouts" : reconnects ? "reconnects" : timeouts ? "request timeouts" : "no reconnects or request timeouts";

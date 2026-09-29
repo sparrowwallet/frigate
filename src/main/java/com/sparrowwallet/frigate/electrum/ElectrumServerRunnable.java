@@ -4,7 +4,11 @@ import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.frigate.io.BackendTls;
+import com.sparrowwallet.drongo.Network;
+import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.io.Config;
+import com.sparrowwallet.frigate.io.Protocol;
+import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,6 +24,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -43,6 +48,8 @@ public class ElectrumServerRunnable implements Runnable {
     private final ConnectionGate connectionGate;
     private final BackendTls backendTls;
     private ScheduledExecutorService statsExecutor;
+    private final AdminServer adminServer;
+    private final long startNanos = System.nanoTime();
     private Duration healthStatsInterval = Duration.ofMinutes(5);
     private Duration usageStatsInterval = Duration.ofHours(1);
     private final Set<RequestHandler> sessions = ConcurrentHashMap.newKeySet();
@@ -69,6 +76,18 @@ public class ElectrumServerRunnable implements Runnable {
         }
 
         openServerSockets(sslContext);
+
+        int adminPort = Config.get().getServer().getAdminPort();
+        if(adminPort > 0) {
+            try {
+                this.adminServer = new AdminServer(adminPort, this::getAdminInfo);
+            } catch(IOException e) {
+                stop();
+                throw new RuntimeException("Cannot open admin port " + adminPort, e);
+            }
+        } else {
+            this.adminServer = null;
+        }
     }
 
     public InetSocketAddress getTcpBind() {
@@ -92,6 +111,9 @@ public class ElectrumServerRunnable implements Runnable {
         if(sslBind != null) banner.append(" ssl://").append(formatBind(sslBind));
         log.info(banner.toString());
         startStats();
+        if(adminServer != null) {
+            adminServer.start();
+        }
 
         CountDownLatch done = new CountDownLatch(serverSockets.size());
         for(ServerSocket ss : serverSockets) {
@@ -179,6 +201,28 @@ public class ElectrumServerRunnable implements Runnable {
     }
 
     /**
+     * @return the admin endpoint's getinfo response, see AdminInfo
+     */
+    public AdminInfo getAdminInfo() {
+        ServerStats stats = getStats();
+        Server backend = Config.get().getServer().getBackendElectrumServerObj();
+        String backendTlsMode = backend != null && backend.getProtocol() == Protocol.SSL ? backendTls.getMode().name().toLowerCase(Locale.ROOT).replace('_', ' ') : null;
+        return new AdminInfo(Frigate.SERVER_VERSION, Network.get().getName(), TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startNanos),
+                AdminInfo.Health.of(stats), AdminInfo.Usage.of(stats), Config.get().getLimits(), backendTlsMode);
+    }
+
+    /**
+     * @return the port the admin endpoint is bound to, or -1 if it is disabled
+     */
+    public int getAdminLocalPort() {
+        return adminServer != null ? adminServer.getLocalPort() : -1;
+    }
+
+    AdminServer getAdminServer() {
+        return adminServer;
+    }
+
+    /**
      * Schedules the health line every five minutes and the hourly usage line, each unless disabled, see ServerStatsLog.
      */
     private synchronized void startStats() {
@@ -236,6 +280,9 @@ public class ElectrumServerRunnable implements Runnable {
         stopped = true;
         if(statsExecutor != null) {
             statsExecutor.shutdownNow();
+        }
+        if(adminServer != null) {
+            adminServer.close();
         }
         for(ServerSocket ss : serverSockets) {
             try {
