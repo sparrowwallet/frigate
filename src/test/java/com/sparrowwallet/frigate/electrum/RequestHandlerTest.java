@@ -109,7 +109,8 @@ public class RequestHandlerTest {
         client = new TestElectrumClient(clientSocket, listener.getLocalPort(), receiveBufferSize);
         Socket serverSide = listener.accept();
 
-        handler = new RequestHandler(serverSide, null, indexQuerier, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()));
+        handler = new RequestHandler(serverSide, null, indexQuerier, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()),
+                com.sparrowwallet.frigate.io.BackendTls.trustAll());
         handlerThread = Thread.ofVirtual().name("TestRequestHandler").start(handler);
         client.request("server.version", "TestWallet", "1.4");
     }

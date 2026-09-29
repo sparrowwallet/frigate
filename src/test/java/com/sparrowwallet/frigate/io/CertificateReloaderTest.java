@@ -15,20 +15,16 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.KeyStore;
 import java.security.cert.X509Certificate;
-import java.util.Base64;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 public class CertificateReloaderTest {
-    private static final String PASSWORD = "changeit";
-
     @TempDir
     static Path generatedDir;
-    private static Pem certA;
-    private static Pem certB;
+    private static TestCertificates.Pem certA;
+    private static TestCertificates.Pem certB;
 
     @TempDir
     Path dir;
@@ -37,31 +33,10 @@ public class CertificateReloaderTest {
     private CertificateReloader reloader;
     private SSLServerSocket serverSocket;
 
-    private record Pem(String certificate, String key) {}
-
     @BeforeAll
     public static void generateCertificates() throws Exception {
-        certA = generate("a");
-        certB = generate("b");
-    }
-
-    /** Generates a self-signed certificate with keytool, and returns it and its key in the PEM formats Frigate reads. */
-    private static Pem generate(String name) throws Exception {
-        File keystore = generatedDir.resolve(name + ".p12").toFile();
-        String keytool = Path.of(System.getProperty("java.home"), "bin", "keytool").toString();
-        Process process = new ProcessBuilder(keytool, "-genkeypair", "-alias", name, "-keyalg", "EC", "-groupname", "secp256r1", "-dname", "CN=" + name,
-                "-validity", "1", "-storetype", "PKCS12", "-keystore", keystore.getAbsolutePath(), "-storepass", PASSWORD, "-keypass", PASSWORD)
-                .redirectErrorStream(true).start();
-        assertTrue(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0, "keytool failed: " + new String(process.getInputStream().readAllBytes()));
-
-        KeyStore keyStore = KeyStore.getInstance("PKCS12");
-        try(InputStream in = new FileInputStream(keystore)) {
-            keyStore.load(in, PASSWORD.toCharArray());
-        }
-        Base64.Encoder encoder = Base64.getMimeEncoder(64, "\n".getBytes(StandardCharsets.US_ASCII));
-        String certificate = "-----BEGIN CERTIFICATE-----\n" + encoder.encodeToString(keyStore.getCertificate(name).getEncoded()) + "\n-----END CERTIFICATE-----\n";
-        String key = "-----BEGIN PRIVATE KEY-----\n" + encoder.encodeToString(keyStore.getKey(name, PASSWORD.toCharArray()).getEncoded()) + "\n-----END PRIVATE KEY-----\n";
-        return new Pem(certificate, key);
+        certA = TestCertificates.generate(generatedDir, "a");
+        certB = TestCertificates.generate(generatedDir, "b");
     }
 
     @BeforeEach

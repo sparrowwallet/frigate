@@ -151,7 +151,7 @@ public final class SslUtil {
         throw new ConfigurationException("SSL: private key " + keyFile.getAbsolutePath() + " does not match certificate " + certFile.getAbsolutePath());
     }
 
-    private static X509Certificate[] readCertificateChain(File certFile) {
+    public static X509Certificate[] readCertificateChain(File certFile) {
         try(FileInputStream fis = new FileInputStream(certFile);
             BufferedInputStream bis = new BufferedInputStream(fis)) {
             CertificateFactory cf = CertificateFactory.getInstance("X.509");

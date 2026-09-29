@@ -496,6 +496,8 @@ public class Config {
         private Integer backendReconnectMaxBackoffSeconds;
         private Integer backendPingIntervalSeconds;
         private Integer sslReloadSeconds;
+        private Boolean backendSslVerify;
+        private String backendSslCertFile;
 
         @JsonIgnore
         private List<Server> advertisedHostsCache;
@@ -711,6 +713,30 @@ public class Config {
 
         public void setBackendPingIntervalSeconds(Integer backendPingIntervalSeconds) {
             this.backendPingIntervalSeconds = backendPingIntervalSeconds;
+        }
+
+        public boolean getBackendSslVerify() {
+            return backendSslVerify != null && backendSslVerify;
+        }
+
+        public void setBackendSslVerify(Boolean backendSslVerify) {
+            this.backendSslVerify = backendSslVerify;
+        }
+
+        public String getBackendSslCertFile() {
+            return backendSslCertFile;
+        }
+
+        public void setBackendSslCertFile(String backendSslCertFile) {
+            this.backendSslCertFile = backendSslCertFile;
+        }
+
+        /**
+         * @return the pinned backend certificate file, resolved like sslCert, or null if none is configured
+         */
+        @JsonIgnore
+        public File getBackendSslCertFileObj() {
+            return backendSslCertFile == null || backendSslCertFile.isBlank() ? null : resolveFrigateDirPath(backendSslCertFile, backendSslCertFile);
         }
 
         public int getSslReloadSeconds() {

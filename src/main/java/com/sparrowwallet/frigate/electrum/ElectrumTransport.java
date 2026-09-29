@@ -6,9 +6,9 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.net.HostAndPort;
+import com.sparrowwallet.frigate.io.BackendTls;
 import com.sparrowwallet.frigate.io.BoundedLineReader;
 import com.sparrowwallet.frigate.io.Protocol;
-import com.sparrowwallet.frigate.io.SslUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,6 +71,7 @@ public class ElectrumTransport implements Transport, Closeable {
     private final Object subscriptionService;
     private final long requestTimeoutMillis;
     private final int maxLineBytes;
+    private final BackendTls backendTls;
 
     private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
     private final ReentrantLock clientRequestLock = new ReentrantLock();
@@ -92,14 +93,26 @@ public class ElectrumTransport implements Transport, Closeable {
      *                             fresh connection cannot deliver its late response.
      */
     public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis) {
-        this(electrumServer, protocol, subscriptionService, requestTimeoutMillis, MAX_LINE_BYTES);
+        this(electrumServer, protocol, subscriptionService, requestTimeoutMillis, BackendTls.trustAll(), MAX_LINE_BYTES);
+    }
+
+    /**
+     * @param backendTls how an ssl:// server's certificate is authenticated
+     */
+    public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis, BackendTls backendTls) {
+        this(electrumServer, protocol, subscriptionService, requestTimeoutMillis, backendTls, MAX_LINE_BYTES);
     }
 
     ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis, int maxLineBytes) {
+        this(electrumServer, protocol, subscriptionService, requestTimeoutMillis, BackendTls.trustAll(), maxLineBytes);
+    }
+
+    ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis, BackendTls backendTls, int maxLineBytes) {
         this.electrumServer = electrumServer;
         this.protocol = protocol;
         this.subscriptionService = subscriptionService;
         this.requestTimeoutMillis = requestTimeoutMillis;
+        this.backendTls = backendTls;
         this.maxLineBytes = maxLineBytes;
     }
 
@@ -121,7 +134,7 @@ public class ElectrumTransport implements Transport, Closeable {
 
         SocketFactory socketFactory;
         if(protocol == Protocol.SSL) {
-            SSLSocketFactory sslSocketFactory = SslUtil.getTrustAllSocketFactory();
+            SSLSocketFactory sslSocketFactory = backendTls.getSocketFactory();
             if(sslSocketFactory == null) {
                 throw new IOException("Could not create SSL socket factory for Electrum server " + host);
             }
@@ -134,6 +147,9 @@ public class ElectrumTransport implements Transport, Closeable {
         int socketTimeoutMillis = (int)Math.min(requestTimeoutMillis, Integer.MAX_VALUE);
         Socket newSocket = socketFactory.createSocket();
         try {
+            if(newSocket instanceof SSLSocket sslSocket) {
+                backendTls.prepare(sslSocket);
+            }
             newSocket.connect(new InetSocketAddress(host, port), socketTimeoutMillis);
             if(newSocket instanceof SSLSocket sslSocket) {
                 //complete the handshake here under the timeout, rather than lazily on the first read or write, where it has none
@@ -144,7 +160,8 @@ public class ElectrumTransport implements Transport, Closeable {
         } catch(UnknownHostException e) {
             newSocket.close();
             throw new IOException("Unknown host " + host, e);
-        } catch(IOException e) {
+        } catch(IOException | RuntimeException e) {
+            //an unchecked exception from socket or TLS setup is reported as a failed connect, so callers retrying on IOException retry
             newSocket.close();
             throw new IOException("Error connecting to Electrum server " + electrumServer + ": " + e.getMessage(), e);
         }

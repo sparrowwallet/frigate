@@ -94,7 +94,8 @@ public class BackendSession implements Closeable {
                     }
                     failing = false;
                     backoffMillis = settings.initialBackoffMillis();
-                } catch(IOException e) {
+                } catch(IOException | RuntimeException e) {
+                    //an unexpected exception is treated as a failed attempt, so it cannot end the reconnect loop for good
                     if(!failing && !closed) {
                         log.warn(e.getMessage() + ", retrying");
                     } else {

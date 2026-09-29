@@ -11,6 +11,7 @@ import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncStart;
 import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncComplete;
 import com.sparrowwallet.frigate.index.*;
+import com.sparrowwallet.frigate.io.BackendTls;
 import com.sparrowwallet.frigate.io.BoundedLineReader;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.JsonRpcBatch;
@@ -77,8 +78,10 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     /**
      * @param connectionGate the server's gate, where this session reserves its scripthash subscriptions against the per-IP and global caps
      * @param ipKey the client's key in the connection gate
+     * @param backendTls how the backend's certificate is authenticated, if it is ssl://
      */
-    public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier, ConnectionGate connectionGate, ConnectionGate.IpKey ipKey) {
+    public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier, ConnectionGate connectionGate, ConnectionGate.IpKey ipKey,
+                          BackendTls backendTls) {
         this.clientSocket = clientSocket;
         this.connectionGate = connectionGate;
         this.ipKey = ipKey;
@@ -92,7 +95,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         if(backendServer != null) {
             long requestTimeoutMillis = TimeUnit.SECONDS.toMillis(serverConfig.getBackendRequestTimeoutSeconds());
             backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(),
-                    new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash), requestTimeoutMillis);
+                    new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash), requestTimeoutMillis, backendTls);
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
         this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);

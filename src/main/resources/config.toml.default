@@ -35,6 +35,8 @@ connect = true
 # backendRequestTimeoutSeconds = 120                # per-request timeout on each session's backend connection; expiry closes that connection
 # backendReconnectMaxBackoffSeconds = 60            # maximum delay between attempts to reconnect a session's lost backend connection
 # backendPingIntervalSeconds = 60                   # keepalive ping on a session's idle backend connection
+# backendSslCertFile = "backend.pem"                # pin an ssl:// backend to exactly this PEM certificate (overrides backendSslVerify)
+# backendSslVerify = false                          # verify an ssl:// backend's certificate against trusted CAs and its hostname
 
 [limits]
 # maxConnections = 1000                # global concurrent session cap

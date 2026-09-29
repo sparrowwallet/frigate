@@ -3,6 +3,7 @@ package com.sparrowwallet.frigate.electrum;
 import com.sparrowwallet.frigate.ConfigurationException;
 import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.IndexQuerier;
+import com.sparrowwallet.frigate.io.BackendTls;
 import com.sparrowwallet.frigate.io.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,7 @@ public class ElectrumServerRunnable implements Runnable {
     private final InetSocketAddress sslBind;
     private final List<ServerSocket> serverSockets = new ArrayList<>();
     private final ConnectionGate connectionGate;
+    private final BackendTls backendTls;
     private final Set<RequestHandler> sessions = ConcurrentHashMap.newKeySet();
 
     protected volatile boolean stopped = false;
@@ -47,6 +49,8 @@ public class ElectrumServerRunnable implements Runnable {
         this.indexQuerier = indexQuerier;
         this.tcpBind = tcpBind;
         this.sslBind = sslBind;
+        //built once, so a bad pinned certificate fails at startup and an unverified ssl:// backend is warned about once
+        this.backendTls = BackendTls.fromConfig(Config.get().getServer());
         Config.LimitsConfig limits = Config.get().getLimits();
         this.connectionGate = new ConnectionGate(limits.getMaxConnections(), limits.getMaxConnectionsPerIp(), limits.getMaxSubscriptions(), limits.getMaxSubscriptionsPerIp());
 
@@ -138,7 +142,7 @@ public class ElectrumServerRunnable implements Runnable {
     private void runSession(Socket clientSocket, ConnectionGate.IpKey ipKey) {
         RequestHandler requestHandler = null;
         try {
-            requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier, connectionGate, ipKey);
+            requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier, connectionGate, ipKey, backendTls);
             sessions.add(requestHandler);
             requestHandler.run();
         } catch(RuntimeException e) {
