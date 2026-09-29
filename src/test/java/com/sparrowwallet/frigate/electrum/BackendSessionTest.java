@@ -225,8 +225,8 @@ public class BackendSessionTest {
         assertEquals(0, session.getConnectCount());
 
         try(FakeElectrumServer lateServer = new FakeElectrumServer(port)) {
-            awaitCondition(session::isConnected, "connection to late backend");
-            assertEquals(1, session.getConnectCount());
+            //the transport reports connected just before the supervisor counts the connection, so wait for both
+            awaitCondition(() -> session.isConnected() && session.getConnectCount() == 1, "connection to late backend");
         }
     }
 

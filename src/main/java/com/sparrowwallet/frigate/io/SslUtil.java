@@ -4,10 +4,12 @@ import com.sparrowwallet.frigate.ConfigurationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509ExtendedKeyManager;
 import javax.net.ssl.X509TrustManager;
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -15,9 +17,11 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
 import java.security.KeyStore;
 import java.security.PrivateKey;
+import java.security.Signature;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
@@ -64,7 +68,25 @@ public final class SslUtil {
         return null;
     }
 
-    public static SSLContext getServerSSLContext(File certFile, File keyFile) {
+    /**
+     * Creates the server's TLS context around the given key manager, which supplies the certificate and key for each handshake.
+     */
+    public static SSLContext getServerSSLContext(X509ExtendedKeyManager keyManager) {
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(new KeyManager[] {keyManager}, null, null);
+            return sslContext;
+        } catch(Exception e) {
+            throw new ConfigurationException("SSL: failed to initialise TLS context: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Loads a PEM certificate chain and PKCS#8 private key into a key manager holding them under the given alias, checking that
+     * the key belongs to the certificate.
+     * @throws ConfigurationException if either file is missing or invalid, or the key does not match the certificate
+     */
+    public static X509ExtendedKeyManager loadKeyManager(File certFile, File keyFile, String alias) {
         if(!certFile.isFile()) {
             throw new ConfigurationException("SSL: certificate file not found: " + certFile.getAbsolutePath());
         }
@@ -74,21 +96,59 @@ public final class SslUtil {
 
         X509Certificate[] chain = readCertificateChain(certFile);
         PrivateKey privateKey = readPrivateKey(keyFile);
+        checkKeyMatchesCertificate(privateKey, chain[0], certFile, keyFile);
 
         try {
             KeyStore keyStore = KeyStore.getInstance("PKCS12");
             keyStore.load(null, new char[0]);
-            keyStore.setKeyEntry("frigate", privateKey, new char[0], chain);
+            keyStore.setKeyEntry(alias, privateKey, new char[0], chain);
 
             KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
             kmf.init(keyStore, new char[0]);
-
-            SSLContext sslContext = SSLContext.getInstance("TLS");
-            sslContext.init(kmf.getKeyManagers(), null, null);
-            return sslContext;
+            for(KeyManager keyManager : kmf.getKeyManagers()) {
+                if(keyManager instanceof X509ExtendedKeyManager x509KeyManager) {
+                    return x509KeyManager;
+                }
+            }
+            throw new ConfigurationException("SSL: no X.509 key manager available");
+        } catch(ConfigurationException e) {
+            throw e;
         } catch(Exception e) {
-            throw new ConfigurationException("SSL: failed to initialise TLS context: " + e.getMessage(), e);
+            throw new ConfigurationException("SSL: failed to load certificate and key: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Checks the private key belongs to the certificate by signing test data with the key and verifying it with the certificate.
+     * A certificate renewal can briefly leave a new certificate beside the old key, which would otherwise only fail at handshake.
+     */
+    private static void checkKeyMatchesCertificate(PrivateKey privateKey, X509Certificate certificate, File certFile, File keyFile) {
+        String algorithm = switch(privateKey.getAlgorithm()) {
+            case "RSA" -> "SHA256withRSA";
+            case "EC" -> "SHA256withECDSA";
+            case "DSA" -> "SHA256withDSA";
+            default -> privateKey.getAlgorithm();
+        };
+
+        try {
+            byte[] data = "frigate key check".getBytes(StandardCharsets.UTF_8);
+            Signature signer = Signature.getInstance(algorithm);
+            signer.initSign(privateKey);
+            signer.update(data);
+            byte[] signature = signer.sign();
+
+            Signature verifier = Signature.getInstance(algorithm);
+            verifier.initVerify(certificate.getPublicKey());
+            verifier.update(data);
+            if(verifier.verify(signature)) {
+                return;
+            }
+        } catch(GeneralSecurityException e) {
+            //a key of a different type to the certificate's also lands here
+            log.debug("Key check failed", e);
+        }
+
+        throw new ConfigurationException("SSL: private key " + keyFile.getAbsolutePath() + " does not match certificate " + certFile.getAbsolutePath());
     }
 
     private static X509Certificate[] readCertificateChain(File certFile) {

@@ -9,6 +9,7 @@ import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.index.IndexQuerier;
 import com.sparrowwallet.drongo.OsType;
+import com.sparrowwallet.frigate.io.CertificateReloader;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.Server;
 import com.sparrowwallet.frigate.io.SslUtil;
@@ -42,6 +43,7 @@ public class Frigate {
     private IndexQuerier indexQuerier;
     private BitcoindClient bitcoindClient;
     private ElectrumServerRunnable electrumServer;
+    private CertificateReloader certificateReloader;
 
     private boolean running;
 
@@ -71,7 +73,12 @@ public class Frigate {
         }
 
         Config.ServerConfig serverConfig = config.getServer();
-        SSLContext sslContext = serverConfig.isSslEnabled() ? SslUtil.getServerSSLContext(serverConfig.getSslCertFile(), serverConfig.getSslKeyFile()) : null;
+        SSLContext sslContext = null;
+        if(serverConfig.isSslEnabled()) {
+            certificateReloader = new CertificateReloader(serverConfig.getSslCertFile(), serverConfig.getSslKeyFile(), serverConfig.getSslReloadSeconds());
+            sslContext = SslUtil.getServerSSLContext(certificateReloader.getKeyManager());
+            certificateReloader.start();
+        }
         InetSocketAddress tcpBind = toBindAddress(serverConfig.getTcpServer());
         InetSocketAddress sslBind = toBindAddress(serverConfig.getSslServer());
         indexQuerier = new IndexQuerier(blocksIndex, mempoolIndex);
@@ -101,6 +108,9 @@ public class Frigate {
         }
         if(electrumServer != null) {
             electrumServer.stop();
+        }
+        if(certificateReloader != null) {
+            certificateReloader.close();
         }
         if(indexQuerier != null) {
             indexQuerier.close();

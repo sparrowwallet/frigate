@@ -484,6 +484,7 @@ public class Config {
         public static final int DEFAULT_BACKEND_REQUEST_TIMEOUT_SECONDS = 120;
         public static final int DEFAULT_BACKEND_RECONNECT_MAX_BACKOFF_SECONDS = 60;
         public static final int DEFAULT_BACKEND_PING_INTERVAL_SECONDS = 60;
+        public static final int DEFAULT_SSL_RELOAD_SECONDS = 300;
 
         private List<String> host;
         private String tcp;
@@ -494,6 +495,7 @@ public class Config {
         private Integer backendRequestTimeoutSeconds;
         private Integer backendReconnectMaxBackoffSeconds;
         private Integer backendPingIntervalSeconds;
+        private Integer sslReloadSeconds;
 
         @JsonIgnore
         private List<Server> advertisedHostsCache;
@@ -709,6 +711,14 @@ public class Config {
 
         public void setBackendPingIntervalSeconds(Integer backendPingIntervalSeconds) {
             this.backendPingIntervalSeconds = backendPingIntervalSeconds;
+        }
+
+        public int getSslReloadSeconds() {
+            return sslReloadSeconds != null && sslReloadSeconds > 0 ? sslReloadSeconds : DEFAULT_SSL_RELOAD_SECONDS;
+        }
+
+        public void setSslReloadSeconds(Integer sslReloadSeconds) {
+            this.sslReloadSeconds = sslReloadSeconds;
         }
     }
 

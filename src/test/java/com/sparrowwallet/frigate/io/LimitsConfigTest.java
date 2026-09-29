@@ -86,12 +86,19 @@ public class LimitsConfigTest {
     }
 
     @Test
+    public void sslReloadSecondsIsParsed() throws Exception {
+        assertEquals(60, MAPPER.readValue("[server]\nsslReloadSeconds = 60\n", Config.class).getServer().getSslReloadSeconds());
+        assertEquals(Config.ServerConfig.DEFAULT_SSL_RELOAD_SECONDS, MAPPER.readValue("[server]\nsslReloadSeconds = 0\n", Config.class).getServer().getSslReloadSeconds());
+    }
+
+    @Test
     public void defaultConfigFileParses() throws Exception {
         try(InputStream in = Config.class.getResourceAsStream("/config.toml.default")) {
             assertNotNull(in);
             Config config = MAPPER.readValue(in, Config.class);
             assertDefaults(config.getLimits());
             assertEquals(Config.ServerConfig.DEFAULT_BACKEND_REQUEST_TIMEOUT_SECONDS, config.getServer().getBackendRequestTimeoutSeconds());
+            assertEquals(Config.ServerConfig.DEFAULT_SSL_RELOAD_SECONDS, config.getServer().getSslReloadSeconds());
         }
     }
 }
