@@ -41,6 +41,7 @@ public class RequestHandlerTest {
     private static final String SCAN_PRIVATE_KEY = "df80725d72aa91f09bf1961e78743b0b0a1b48c3218e369eb7ed08dfe857907b";
     private static final String SPEND_PUBLIC_KEY = "03ef6df342883059d5261e12b865b51a3d1761e6b51736fbd9936ce385b5d8005c";
     private static final String KEYSTORE_PASSWORD = "changeit";
+    private static final int NOTIFICATION_QUEUE_SIZE = 50;
 
     @TempDir
     static Path tempDir;
@@ -77,6 +78,7 @@ public class RequestHandlerTest {
         Config config = new Config();
         config.getServer().setBackendElectrumServer(backend.getUrl());
         config.getServer().setBackendRequestTimeoutSeconds(5);
+        config.getLimits().setNotificationQueueSize(NOTIFICATION_QUEUE_SIZE);
         Config.setInstance(config);
     }
 
@@ -227,7 +229,8 @@ public class RequestHandlerTest {
 
         //stall the writer, then overflow the notification queue behind it
         stallClient(address);
-        for(int i = 0; i <= AsyncNotifier.DEFAULT_QUEUE_SIZE; i++) {
+        //one more than the configured queue size
+        for(int i = 0; i <= NOTIFICATION_QUEUE_SIZE; i++) {
             handler.notifySilentPayments(silentPaymentsNotification(address, 1));
         }
 

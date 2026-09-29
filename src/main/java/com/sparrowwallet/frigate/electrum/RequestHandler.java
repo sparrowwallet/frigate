@@ -69,7 +69,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
         this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);
-        this.notifier = new AsyncNotifier("ElectrumNotify-" + System.identityHashCode(this), AsyncNotifier.DEFAULT_QUEUE_SIZE, scriptHashSubscriptions,
+        this.notifier = new AsyncNotifier("ElectrumNotify-" + System.identityHashCode(this), Config.get().getLimits().getNotificationQueueSize(), scriptHashSubscriptions,
                 notificationService::notifyScriptHash, this::disconnectSlowConsumer);
         if(backendTransport != null) {
             BackendSession.Settings settings = new BackendSession.Settings(BackendSession.INITIAL_BACKOFF_MILLIS,

@@ -33,8 +33,6 @@ import java.util.function.BiConsumer;
 public class AsyncNotifier {
     private static final Logger log = LoggerFactory.getLogger(AsyncNotifier.class);
 
-    public static final int DEFAULT_QUEUE_SIZE = 1_000;
-
     private final String name;
     private final int queueSize;
     private final ScriptHashSubscriptions scriptHashSubscriptions;

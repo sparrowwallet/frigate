@@ -29,6 +29,7 @@ public class Config {
     private IndexConfig index;
     private ScanConfig scan;
     private ServerConfig server;
+    private LimitsConfig limits;
     private DatabaseConfig database;
 
     private static Config INSTANCE;
@@ -40,6 +41,7 @@ public class Config {
         index = new IndexConfig();
         scan = new ScanConfig();
         server = new ServerConfig();
+        limits = new LimitsConfig();
         database = new DatabaseConfig();
     }
 
@@ -230,6 +232,13 @@ public class Config {
             server = new ServerConfig();
         }
         return server;
+    }
+
+    public LimitsConfig getLimits() {
+        if(limits == null) {
+            limits = new LimitsConfig();
+        }
+        return limits;
     }
 
     public DatabaseConfig getDatabase() {
@@ -700,6 +709,130 @@ public class Config {
 
         public void setBackendPingIntervalSeconds(Integer backendPingIntervalSeconds) {
             this.backendPingIntervalSeconds = backendPingIntervalSeconds;
+        }
+    }
+
+    /**
+     * Limits protecting the Electrum server when it is open to the public: connection caps, input bounds, subscription caps,
+     * idle timeout, notification queue bound and request pacing. A setting that is absent or not positive takes its default.
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class LimitsConfig {
+        public static final int DEFAULT_MAX_CONNECTIONS = 1_000;
+        public static final int DEFAULT_MAX_CONNECTIONS_PER_IP = 12;
+        public static final int DEFAULT_MAX_REQUEST_BYTES = 1_000_000;
+        public static final int DEFAULT_MAX_BATCH_SIZE = 100;
+        public static final int DEFAULT_SESSION_TIMEOUT_SECONDS = 600;
+        public static final int DEFAULT_MAX_SUBSCRIPTIONS_PER_SESSION = 25_000;
+        public static final int DEFAULT_MAX_SUBSCRIPTIONS_PER_IP = 75_000;
+        public static final long DEFAULT_MAX_SUBSCRIPTIONS = 1_000_000;
+        public static final int DEFAULT_NOTIFICATION_QUEUE_SIZE = 1_000;
+        public static final int DEFAULT_REQUEST_TOKENS = 1_000;
+        public static final int DEFAULT_REQUEST_TOKENS_PER_SECOND = 100;
+
+        private Integer maxConnections;
+        private Integer maxConnectionsPerIp;
+        private Integer maxRequestBytes;
+        private Integer maxBatchSize;
+        private Integer sessionTimeoutSeconds;
+        private Integer maxSubscriptionsPerSession;
+        private Integer maxSubscriptionsPerIp;
+        private Long maxSubscriptions;
+        private Integer notificationQueueSize;
+        private Integer requestTokens;
+        private Integer requestTokensPerSecond;
+
+        private static int positiveOrDefault(Integer value, int defaultValue) {
+            return value != null && value > 0 ? value : defaultValue;
+        }
+
+        public int getMaxConnections() {
+            return positiveOrDefault(maxConnections, DEFAULT_MAX_CONNECTIONS);
+        }
+
+        public void setMaxConnections(Integer maxConnections) {
+            this.maxConnections = maxConnections;
+        }
+
+        public int getMaxConnectionsPerIp() {
+            return positiveOrDefault(maxConnectionsPerIp, DEFAULT_MAX_CONNECTIONS_PER_IP);
+        }
+
+        public void setMaxConnectionsPerIp(Integer maxConnectionsPerIp) {
+            this.maxConnectionsPerIp = maxConnectionsPerIp;
+        }
+
+        public int getMaxRequestBytes() {
+            return positiveOrDefault(maxRequestBytes, DEFAULT_MAX_REQUEST_BYTES);
+        }
+
+        public void setMaxRequestBytes(Integer maxRequestBytes) {
+            this.maxRequestBytes = maxRequestBytes;
+        }
+
+        public int getMaxBatchSize() {
+            return positiveOrDefault(maxBatchSize, DEFAULT_MAX_BATCH_SIZE);
+        }
+
+        public void setMaxBatchSize(Integer maxBatchSize) {
+            this.maxBatchSize = maxBatchSize;
+        }
+
+        public int getSessionTimeoutSeconds() {
+            return positiveOrDefault(sessionTimeoutSeconds, DEFAULT_SESSION_TIMEOUT_SECONDS);
+        }
+
+        public void setSessionTimeoutSeconds(Integer sessionTimeoutSeconds) {
+            this.sessionTimeoutSeconds = sessionTimeoutSeconds;
+        }
+
+        public int getMaxSubscriptionsPerSession() {
+            return positiveOrDefault(maxSubscriptionsPerSession, DEFAULT_MAX_SUBSCRIPTIONS_PER_SESSION);
+        }
+
+        public void setMaxSubscriptionsPerSession(Integer maxSubscriptionsPerSession) {
+            this.maxSubscriptionsPerSession = maxSubscriptionsPerSession;
+        }
+
+        public int getMaxSubscriptionsPerIp() {
+            return positiveOrDefault(maxSubscriptionsPerIp, DEFAULT_MAX_SUBSCRIPTIONS_PER_IP);
+        }
+
+        public void setMaxSubscriptionsPerIp(Integer maxSubscriptionsPerIp) {
+            this.maxSubscriptionsPerIp = maxSubscriptionsPerIp;
+        }
+
+        public long getMaxSubscriptions() {
+            return maxSubscriptions != null && maxSubscriptions > 0 ? maxSubscriptions : DEFAULT_MAX_SUBSCRIPTIONS;
+        }
+
+        public void setMaxSubscriptions(Long maxSubscriptions) {
+            this.maxSubscriptions = maxSubscriptions;
+        }
+
+        public int getNotificationQueueSize() {
+            return positiveOrDefault(notificationQueueSize, DEFAULT_NOTIFICATION_QUEUE_SIZE);
+        }
+
+        public void setNotificationQueueSize(Integer notificationQueueSize) {
+            this.notificationQueueSize = notificationQueueSize;
+        }
+
+        public int getRequestTokens() {
+            return positiveOrDefault(requestTokens, DEFAULT_REQUEST_TOKENS);
+        }
+
+        public void setRequestTokens(Integer requestTokens) {
+            this.requestTokens = requestTokens;
+        }
+
+        public int getRequestTokensPerSecond() {
+            return positiveOrDefault(requestTokensPerSecond, DEFAULT_REQUEST_TOKENS_PER_SECOND);
+        }
+
+        public void setRequestTokensPerSecond(Integer requestTokensPerSecond) {
+            this.requestTokensPerSecond = requestTokensPerSecond;
         }
     }
 

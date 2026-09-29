@@ -34,6 +34,20 @@ connect = true
 # backendReconnectMaxBackoffSeconds = 60            # maximum delay between attempts to reconnect a session's lost backend connection
 # backendPingIntervalSeconds = 60                   # keepalive ping on a session's idle backend connection
 
+[limits]
+# maxConnections = 1000                # global concurrent session cap
+# maxConnectionsPerIp = 12             # per client IP (IPv6: per /64); loopback exempt
+# maxRequestBytes = 1000000            # max JSON-RPC line length; oversized requests disconnect
+# maxBatchSize = 100                   # max requests per JSON-RPC batch array
+# sessionTimeoutSeconds = 600          # idle disconnect; Electrum clients ping every ~60s
+# maxSubscriptionsPerSession = 25000   # scripthash subscriptions per connection
+# maxSubscriptionsPerIp = 75000        # scripthash subscriptions per client IP
+# maxSubscriptions = 1000000           # global scripthash subscription cap
+# notificationQueueSize = 1000         # notifications (headers, silent payments) a client may fall behind before it is disconnected;
+#                                      # raise for clients on slow links receiving very large silent payments scans
+# requestTokens = 1000                 # token-bucket burst per session (batch items count individually)
+# requestTokensPerSecond = 100         # token refill rate; requests delay, never error
+
 # [database]
 # url = "jdbc:duckdb:/custom/path/frigate.duckdb"
 # readUrls = ["jdbc:duckdb:/replica1/frigate.duckdb"]
