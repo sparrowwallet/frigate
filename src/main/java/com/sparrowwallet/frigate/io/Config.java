@@ -188,6 +188,14 @@ public class Config {
         }
     }
 
+    /**
+     * Replaces the loaded configuration, so tests can run with their own settings rather than reading config.toml from the
+     * Frigate home directory. Passing null makes the next get() load from the file again.
+     */
+    public static synchronized void setInstance(Config config) {
+        INSTANCE = config;
+    }
+
     public static synchronized Config get() {
         if(INSTANCE == null) {
             INSTANCE = load();

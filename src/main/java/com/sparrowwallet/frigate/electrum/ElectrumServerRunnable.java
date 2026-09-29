@@ -61,6 +61,13 @@ public class ElectrumServerRunnable implements Runnable {
         return sslBind;
     }
 
+    /**
+     * @return the port the plaintext listener is bound to, which differs from the configured bind port when that is 0, or -1
+     */
+    public int getTcpLocalPort() {
+        return serverSockets.stream().filter(ss -> !(ss instanceof SSLServerSocket)).mapToInt(ServerSocket::getLocalPort).findFirst().orElse(-1);
+    }
+
     public void run() {
         StringBuilder banner = new StringBuilder("Electrum server listening on");
         if(tcpBind != null) banner.append(" tcp://").append(formatBind(tcpBind));
