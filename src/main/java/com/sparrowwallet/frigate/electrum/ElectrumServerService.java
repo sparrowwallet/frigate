@@ -249,7 +249,7 @@ public class ElectrumServerService {
         }
         ElectrumBlockHeader tip = bitcoindClient.getTip();
         requestHandler.runAfterResponse(() -> {
-            requestHandler.setHeadersSubscribed(true);
+            requestHandler.subscribeHeaders();
             ElectrumBlockHeader currentTip = bitcoindClient.getTip();
             if(currentTip != null && !currentTip.equals(tip)) {
                 requestHandler.notifyHeaders(currentTip);

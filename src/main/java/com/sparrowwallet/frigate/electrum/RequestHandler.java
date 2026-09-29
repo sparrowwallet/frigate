@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
-public class RequestHandler implements Runnable, SubscriptionStatus, Thread.UncaughtExceptionHandler {
+public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDispatcher.Subscriber, Thread.UncaughtExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(RequestHandler.class);
     private final Socket clientSocket;
     private final ElectrumServerService electrumServerService;
@@ -39,6 +39,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     private final AtomicBoolean disconnected = new AtomicBoolean(false);
     private final ElectrumTransport backendTransport;
     private final Thread reader;
+    private final HeadersDispatcher headersDispatcher;
 
     private boolean connected;
     private volatile boolean headersSubscribed;
@@ -53,6 +54,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
 
     public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
         this.clientSocket = clientSocket;
+        this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
         Server backendServer = Config.get().getServer().getBackendElectrumServerObj();
         if(backendServer != null) {
             this.backendTransport = new ElectrumTransport(backendServer.getHostAndPort(), backendServer.getProtocol(), new BackendSubscriptionService());
@@ -105,6 +107,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
             this.connected = false;
             this.disconnected.set(true);
             Frigate.getEventBus().unregister(this);
+            if(headersDispatcher != null) {
+                headersDispatcher.unsubscribe(this);
+            }
 
             try {
                 clientSocket.close();
@@ -157,8 +162,11 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         return !disconnected.get() || connected;
     }
 
-    public void setHeadersSubscribed(boolean headersSubscribed) {
-        this.headersSubscribed = headersSubscribed;
+    public void subscribeHeaders() {
+        this.headersSubscribed = true;
+        if(headersDispatcher != null) {
+            headersDispatcher.subscribe(this);
+        }
     }
 
     @Override
@@ -228,14 +236,8 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         return subscription == null ? new HashSet<>() : subscription.getMempoolTxids();
     }
 
-    @Subscribe
-    public void newBlock(ElectrumBlockHeader electrumBlockHeader) {
-        if(isHeadersSubscribed()) {
-            notifyHeaders(electrumBlockHeader);
-        }
-    }
-
-    void notifyHeaders(ElectrumBlockHeader electrumBlockHeader) {
+    @Override
+    public void notifyHeaders(ElectrumBlockHeader electrumBlockHeader) {
         notificationService.notifyHeaders(electrumBlockHeader);
     }
 

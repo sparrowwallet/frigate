@@ -10,6 +10,7 @@ import com.sparrowwallet.drongo.silentpayments.SilentPaymentUtils;
 import com.sparrowwallet.drongo.wallet.BlockTransaction;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumBlockHeader;
+import com.sparrowwallet.frigate.electrum.HeadersDispatcher;
 import com.sparrowwallet.frigate.index.Index;
 import com.sparrowwallet.frigate.io.Config;
 import com.sparrowwallet.frigate.io.CoreAuthType;
@@ -54,6 +55,7 @@ public class BitcoindClient {
     private final Timer timer = new Timer(true);
     private final Index blocksIndex;
     private final Index mempoolIndex;
+    private final HeadersDispatcher headersDispatcher = new HeadersDispatcher();
 
     private NetworkInfo networkInfo;
     private String lastBlock;
@@ -162,7 +164,7 @@ public class BitcoindClient {
         }
 
         lastBlock = blockchainInfo.bestblockhash();
-        Frigate.getEventBus().post(tip);
+        publishTip();
 
         blocksIndex.repairOrphanTweaks();
 
@@ -196,7 +198,7 @@ public class BitcoindClient {
         blocksIndex.setSteadyState(true);
         updateMempoolIndex();
         lastMempoolDiffMs = System.currentTimeMillis();
-        Frigate.getEventBus().post(tip);
+        publishTip();
 
         String zmqEndpoint = Config.get().getCore().getZmqSequenceEndpoint();
         boolean autoDiscoveryAttempted = false;
@@ -637,6 +639,17 @@ public class BitcoindClient {
         return tip;
     }
 
+    public HeadersDispatcher getHeadersDispatcher() {
+        return headersDispatcher;
+    }
+
+    private void publishTip() {
+        ElectrumBlockHeader currentTip = tip;
+        headersDispatcher.notify(currentTip);
+        //The EventBus post remains only for the macOS tray's progress display
+        Frigate.getEventBus().post(currentTip);
+    }
+
     private Script getScriptPubKey(BitcoindClientService bitcoindClientService, HexFormat hexFormat, HashIndex hashIndex) {
         Script scriptPubKey = getFromScriptPubKeyCache(hashIndex);
         if(scriptPubKey == null) {
@@ -718,7 +731,7 @@ public class BitcoindClient {
                     VerboseBlockHeader blockHeader = getBitcoindService().getBlockHeader(blockchainInfo.bestblockhash());
                     tip = blockHeader.getBlockHeader();
                     log.debug("New block height " + tip.height());
-                    Frigate.getEventBus().post(tip);
+                    publishTip();
                     updateBlocksIndex();
                     newBlock = true;
                 }
