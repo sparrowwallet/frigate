@@ -17,6 +17,6 @@ public class SubscriptionService {
 
     @JsonRpcMethod("blockchain.silentpayments.subscribe")
     public void silentPaymentsUpdate(@JsonRpcParam("subscription") SilentPaymentsSubscription subscription, @JsonRpcParam("progress") double progress, @JsonRpcParam("history") List<SilentPaymentsTxEntry> history) {
-        FrigateCli.getEventBus().post(new SilentPaymentsNotification(subscription, progress, history, null));
+        FrigateCli.getEventBus().post(new SilentPaymentsNotification(subscription, progress, history));
     }
 }

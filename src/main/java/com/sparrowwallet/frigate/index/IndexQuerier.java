@@ -3,7 +3,6 @@ package com.sparrowwallet.frigate.index;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.sparrowwallet.drongo.protocol.Sha256Hash;
 import com.sparrowwallet.drongo.silentpayments.SilentPaymentScanAddress;
-import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.SubscriptionStatus;
 import com.sparrowwallet.frigate.electrum.SilentPaymentAddressSubscription;
 import com.sparrowwallet.frigate.electrum.SilentPaymentsNotification;
@@ -87,7 +86,7 @@ public class IndexQuerier {
 
                 boolean wasCancelled = cancelled.getAsBoolean();
                 if(!wasCancelled && (isHistorical || !history.isEmpty())) {
-                    Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(history), subscriptionStatusRef.get()));
+                    SubscriptionStatus.notifySilentPayments(subscriptionStatusRef, new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(history)));
                 }
                 if(!wasCancelled && isHistorical) {
                     subscription.markHistoricalComplete();
@@ -109,7 +108,7 @@ public class IndexQuerier {
                 List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, mempoolTxids, subscriptionStatusRef, notificationSubscription, cancelled);
 
                 if(!cancelled.getAsBoolean() && !mempoolHistory.isEmpty()) {
-                    Frigate.getEventBus().post(new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(mempoolHistory), subscriptionStatusRef.get()));
+                    SubscriptionStatus.notifySilentPayments(subscriptionStatusRef, new SilentPaymentsNotification(notificationSubscription, PROGRESS_COMPLETE, new ArrayList<>(mempoolHistory)));
                 }
             } catch(Throwable t) {
                 log.error("Mempool scan task failed for " + scanAddress, t);

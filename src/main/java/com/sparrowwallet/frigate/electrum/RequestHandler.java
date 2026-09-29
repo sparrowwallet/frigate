@@ -45,6 +45,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
     private final Set<String> scriptHashesSubscribed = ConcurrentHashMap.newKeySet();
     private final Map<String, SilentPaymentAddressSubscription> silentPaymentsAddressesSubscribed = new ConcurrentHashMap<>();
     private final Deque<Runnable> postResponseTasks = new ArrayDeque<>();
+    private final Object silentPaymentsNotificationLock = new Object();
 
     private final ReentrantLock writeLock = new ReentrantLock();
     private volatile PrintWriter out;
@@ -245,11 +246,19 @@ public class RequestHandler implements Runnable, SubscriptionStatus, Thread.Unca
         }
     }
 
-    @Subscribe
-    public void silentPaymentsNotification(SilentPaymentsNotification notification) {
-        if(isSilentPaymentsAddressSubscribed(notification.subscription().address()) && notification.status() == this) {
+    /**
+     * Called directly by the scan that this session requested (no EventBus fan-out). Scans run on several threads, so calls are
+     * serialized here to keep the mempool txid bookkeeping and the delivery filter atomic, as the EventBus previously guaranteed.
+     */
+    @Override
+    public void notifySilentPayments(SilentPaymentsNotification notification) {
+        if(!isConnected()) {
+            return;
+        }
+
+        synchronized(silentPaymentsNotificationLock) {
             SilentPaymentAddressSubscription subscription = silentPaymentsAddressesSubscribed.get(notification.subscription().address());
-            if(!subscription.isActive()) {
+            if(subscription == null || !subscription.isActive()) {
                 return;
             }
             notification.history().stream().mapToInt(SilentPaymentsTxEntry::getHeight).filter(h -> h > 0).max().ifPresent(subscription::accumulateMaxBlockHeight);

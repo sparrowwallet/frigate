@@ -421,11 +421,11 @@ public class Index {
                                     while((entry = queue.poll()) != null) {
                                         history.add(entry);
                                         if(history.size() >= HISTORY_PAGE_SIZE) {
-                                            Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
+                                            SubscriptionStatus.notifySilentPayments(subscriptionStatusRef, new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history)));
                                             history.clear();
                                         }
                                     }
-                                    Frigate.getEventBus().post(new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history), subscriptionStatusRef.get()));
+                                    SubscriptionStatus.notifySilentPayments(subscriptionStatusRef, new SilentPaymentsNotification(subscription, progress, new ArrayList<>(history)));
                                     history.clear();
                                 } catch(Exception e) {
                                     log.error("Error getting query progress", e);
