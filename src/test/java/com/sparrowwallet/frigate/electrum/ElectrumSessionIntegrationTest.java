@@ -51,10 +51,16 @@ public class ElectrumSessionIntegrationTest {
 
     /** Starts a server, reading the current config; a test changing limits read at startup restarts it. */
     private void startServer() {
+        startServer(runnable -> {});
+    }
+
+    /** Starts a server, configuring it before it runs. */
+    private void startServer(java.util.function.Consumer<ElectrumServerRunnable> configure) {
         if(server != null) {
             server.stop();
         }
         server = new ElectrumServerRunnable(null, null, new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), null, null);
+        configure.accept(server);
         Thread.ofVirtual().name("TestElectrumServer").start(server);
     }
 
@@ -422,6 +428,75 @@ public class ElectrumSessionIntegrationTest {
         }
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
         assertTrue(elapsedMillis >= 1800 && elapsedMillis < 5000, "elapsed " + elapsedMillis + "ms");
+    }
+
+    @Test
+    public void statsReflectSessionsSubscriptionsAndEvents() throws Exception {
+        ServerStats baseline = server.getStats();
+        TestElectrumClient first = connectClient();
+        for(int i = 0; i < 3; i++) {
+            subscribe(first, scriptHash(i));
+        }
+        TestElectrumClient second = connectClient();
+        subscribe(second, scriptHash(10));
+        backend.setStatus(scriptHash(0), status(0), true);
+        backend.setStatus(scriptHash(10), status(10), true);
+        assertNotified(first, scriptHash(0), status(0));
+        assertNotified(second, scriptHash(10), status(10));
+
+        await(() -> server.getStats().backendConnected() == 2, "backend connections");
+        ServerStats stats = server.getStats();
+        assertEquals(2, stats.sessions());
+        assertEquals(1, stats.distinctIps());
+        assertEquals(4, stats.scriptHashSubscriptions());
+        assertTrue(stats.backendConfigured());
+        assertEquals(2, stats.backendSessions());
+        assertNull(stats.tipHeight());
+        //other tests in the same process may have delivered notifications before the baseline, so compare changes
+        assertEquals(2, stats.notificationsDelivered() - baseline.notificationsDelivered());
+
+        //a closed session's delivered notifications still count, and a backend restart counts a reconnect per session
+        first.close();
+        await(() -> server.getStats().sessions() == 1, "session to close");
+        backend.dropAllConnections();
+        await(() -> server.getStats().backendReconnects() - baseline.backendReconnects() >= 1 && server.getStats().backendConnected() == 1, "reconnect");
+        ServerStats after = server.getStats();
+        assertEquals(1, after.sessions());
+        assertEquals(1, after.scriptHashSubscriptions());
+        assertEquals(2, after.notificationsDelivered() - baseline.notificationsDelivered());
+    }
+
+    @Test
+    public void statsLinesAreLoggedWhenEnabled() throws Exception {
+        List<String> lines = statsLinesLogged(true, true);
+        assertTrue(lines.stream().anyMatch(line -> line.startsWith("Server health: backend connected, no reconnects or request timeouts in ")), lines.toString());
+        //fewer than ten of everything, so the usage line is suppressed
+        assertTrue(lines.stream().noneMatch(line -> line.startsWith("Aggregate server stats")), lines.toString());
+
+        assertEquals(List.of(), statsLinesLogged(false, false));
+    }
+
+    /**
+     * Restarts the server with the health and usage lines enabled or not, at short intervals, and with a connected client, returning
+     * the stats lines logged within 2.5s.
+     */
+    private List<String> statsLinesLogged(boolean health, boolean usage) throws Exception {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)org.slf4j.LoggerFactory.getLogger(ElectrumServerRunnable.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            Config.get().getServer().setHealthStatsEnabled(health);
+            Config.get().getScan().setMetricsEnabled(usage);
+            startServer(runnable -> runnable.setStatsIntervals(java.time.Duration.ofSeconds(1), java.time.Duration.ofSeconds(1)));
+            TestElectrumClient client = connectClient();
+            Thread.sleep(2500);
+            client.close();
+            return appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.startsWith("Server health") || message.startsWith("Aggregate server stats")).toList();
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test

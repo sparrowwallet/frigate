@@ -88,7 +88,9 @@ public class BackendSession implements Closeable {
                 try {
                     transport.connect();
                     reader = Thread.ofVirtual().name(name + "-reader").start(transport::readInputLoop);
-                    connectCount++;
+                    if(connectCount++ > 0) {
+                        ServerMetrics.backendReconnected();
+                    }
                     if(failing) {
                         log.info("Reconnected to backend Electrum server for " + name);
                     }

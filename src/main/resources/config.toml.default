@@ -31,6 +31,7 @@ connect = true
 # sslKey  = "key.pem"            # PEM-encoded PKCS#8 private key; bare filename resolves under Frigate's home dir, or use an absolute path
 # sslReloadSeconds = 300         # how often to check the certificate and key files, reloading them without a restart when renewed;
 #                                # 0 or less uses the default (reloading does nothing unless the files change)
+# healthStatsEnabled = true      # log backend and index health every 5 minutes, without counts (usage is logged hourly, per [scan] metricsEnabled)
 # backendElectrumServer = "tcp://localhost:60001"   # backend must listen on a port distinct from Frigate's tcp/ssl listeners above
 # backendRequestTimeoutSeconds = 120                # per-request timeout on each session's backend connection; expiry closes that connection
 # backendReconnectMaxBackoffSeconds = 60            # maximum delay between attempts to reconnect a session's lost backend connection

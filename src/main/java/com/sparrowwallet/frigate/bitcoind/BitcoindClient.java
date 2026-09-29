@@ -639,6 +639,14 @@ public class BitcoindClient {
         return tip;
     }
 
+    public int getIndexedHeight() {
+        return blocksIndex.getLastBlockIndexed();
+    }
+
+    public int getMempoolSize() {
+        return mempoolTxIds.size();
+    }
+
     public HeadersDispatcher getHeadersDispatcher() {
         return headersDispatcher;
     }

@@ -360,6 +360,21 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         return scriptHashSubscriptions.size();
     }
 
+    public boolean hasBackend() {
+        return backendSession != null;
+    }
+
+    public boolean isBackendConnected() {
+        return backendSession != null && backendSession.isConnected();
+    }
+
+    /**
+     * @return the number of notifications waiting to be delivered to this client
+     */
+    public int getNotifierQueueDepth() {
+        return notifier.getPendingCount();
+    }
+
     @Override
     public boolean isScriptHashSubscribed(String scriptHash) {
         return scriptHashSubscriptions.isSubscribed(scriptHash);

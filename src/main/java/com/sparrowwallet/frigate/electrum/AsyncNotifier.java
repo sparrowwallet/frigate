@@ -79,6 +79,7 @@ public class AsyncNotifier {
                 pendingStatus.put(scriptHash, new PendingStatus(status, sequence));
             }
             overflowed = pendingStatus.size() > scriptHashSubscriptions.size() + queueSize;
+            ServerMetrics.notifierQueueDepth(pendingStatus.size() + otherNotifications.size());
             notifyAll();
         }
 
@@ -96,6 +97,7 @@ public class AsyncNotifier {
             overflowed = otherNotifications.size() >= queueSize;
             if(!overflowed) {
                 otherNotifications.add(notification);
+                ServerMetrics.notifierQueueDepth(pendingStatus.size() + otherNotifications.size());
                 notifyAll();
             }
         }
@@ -169,7 +171,10 @@ public class AsyncNotifier {
         return delivering;
     }
 
-    synchronized int getPendingCount() {
+    /**
+     * @return the number of notifications waiting to be delivered
+     */
+    public synchronized int getPendingCount() {
         return pendingStatus.size() + otherNotifications.size();
     }
 
@@ -230,6 +235,7 @@ public class AsyncNotifier {
                 } else {
                     scriptHashWriter.accept(scriptHash, status);
                 }
+                ServerMetrics.notificationDelivered();
             } catch(Exception e) {
                 log.error("Error delivering notification", e);
             } finally {

@@ -1,5 +1,7 @@
 package com.sparrowwallet.frigate.index;
 
+import com.sparrowwallet.frigate.io.AggregateCounts;
+
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 
@@ -7,8 +9,6 @@ import java.util.concurrent.atomic.AtomicIntegerArray;
  * Privacy-preserving aggregate counters for historical scan throughput.
  */
 class HistoricalScanMetrics {
-    private static final int MIN_SAMPLES_PER_BUCKET = 10;
-    private static final int COUNT_ROUNDING = 10;
 
     static final String[] RESULT_LABELS = {"0", "1-10", "11-100", "101-1000", "1001-10000", "10001+"};
     static final String[] DURATION_LABELS = {"0-100ms", "100-500ms", "500ms-2s", "2-10s", "10-60s", "60s+"};
@@ -75,7 +75,7 @@ class HistoricalScanMetrics {
     private static String formatHist(int[] counts, String[] labels) {
         StringBuilder sb = new StringBuilder();
         for(int i = 0; i < counts.length; i++) {
-            int rounded = roundCount(counts[i]);
+            long rounded = AggregateCounts.round(counts[i]);
             if(rounded > 0) {
                 if(sb.length() > 0) {
                     sb.append(", ");
@@ -84,12 +84,5 @@ class HistoricalScanMetrics {
             }
         }
         return sb.toString();
-    }
-
-    private static int roundCount(int raw) {
-        if(raw < MIN_SAMPLES_PER_BUCKET) {
-            return 0;
-        }
-        return ((raw + COUNT_ROUNDING / 2) / COUNT_ROUNDING) * COUNT_ROUNDING;
     }
 }

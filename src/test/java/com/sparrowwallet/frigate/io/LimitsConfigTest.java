@@ -92,6 +92,12 @@ public class LimitsConfigTest {
     }
 
     @Test
+    public void healthStatsEnabledByDefault() throws Exception {
+        assertTrue(new Config().getServer().isHealthStatsEnabled());
+        assertFalse(MAPPER.readValue("[server]\nhealthStatsEnabled = false\n", Config.class).getServer().isHealthStatsEnabled());
+    }
+
+    @Test
     public void defaultConfigFileParses() throws Exception {
         try(InputStream in = Config.class.getResourceAsStream("/config.toml.default")) {
             assertNotNull(in);

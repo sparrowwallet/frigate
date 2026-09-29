@@ -214,6 +214,7 @@ public class ElectrumTransport implements Transport, Closeable {
                 if(message == null) {
                     log.warn("Request to Electrum server " + electrumServer + " timed out after " + requestTimeoutMillis + "ms, closing connection");
                     current.close();
+                    ServerMetrics.backendTimedOut();
                     throw new BackendUnavailableException("request timed out");
                 }
                 if(message.connection() != current) {
@@ -253,6 +254,7 @@ public class ElectrumTransport implements Transport, Closeable {
         boolean timedOut = watchdog != null && !watchdog.cancel(false);
         if(failed || timedOut) {
             if(timedOut) {
+                ServerMetrics.backendTimedOut();
                 log.warn("Request to Electrum server " + electrumServer + " could not be written within " + requestTimeoutMillis + "ms, closing connection");
             }
             current.close();

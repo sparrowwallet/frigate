@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -25,6 +26,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class ElectrumServerRunnable implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(ElectrumServerRunnable.class);
@@ -39,6 +42,9 @@ public class ElectrumServerRunnable implements Runnable {
     private final List<ServerSocket> serverSockets = new ArrayList<>();
     private final ConnectionGate connectionGate;
     private final BackendTls backendTls;
+    private ScheduledExecutorService statsExecutor;
+    private Duration healthStatsInterval = Duration.ofMinutes(5);
+    private Duration usageStatsInterval = Duration.ofHours(1);
     private final Set<RequestHandler> sessions = ConcurrentHashMap.newKeySet();
 
     protected volatile boolean stopped = false;
@@ -85,6 +91,7 @@ public class ElectrumServerRunnable implements Runnable {
         if(tcpBind != null) banner.append(" tcp://").append(formatBind(tcpBind));
         if(sslBind != null) banner.append(" ssl://").append(formatBind(sslBind));
         log.info(banner.toString());
+        startStats();
 
         CountDownLatch done = new CountDownLatch(serverSockets.size());
         for(ServerSocket ss : serverSockets) {
@@ -165,6 +172,56 @@ public class ElectrumServerRunnable implements Runnable {
     }
 
     /**
+     * @return a snapshot of the server's state
+     */
+    public ServerStats getStats() {
+        return ServerStats.collect(sessions, connectionGate, Config.get().getServer().getBackendElectrumServerObj() != null, bitcoindClient);
+    }
+
+    /**
+     * Schedules the health line every five minutes and the hourly usage line, each unless disabled, see ServerStatsLog.
+     */
+    private synchronized void startStats() {
+        boolean health = Config.get().getServer().isHealthStatsEnabled();
+        boolean usage = Config.get().getScan().isMetricsEnabled();
+        if((!health && !usage) || stopped) {
+            return;
+        }
+
+        ServerStatsLog statsLog = new ServerStatsLog(this::getStats, ServerMetrics::takeNotifierQueueHighWater, System::nanoTime);
+        statsExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread thread = new Thread(r, "ElectrumServerStats");
+            thread.setDaemon(true);
+            return thread;
+        });
+        if(health) {
+            schedule(() -> statsLog.nextHealthLine().ifPresent(log::info), healthStatsInterval);
+        }
+        if(usage) {
+            schedule(() -> statsLog.nextUsageLine().ifPresent(log::info), usageStatsInterval);
+        }
+    }
+
+    private void schedule(Runnable task, Duration interval) {
+        statsExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                task.run();
+            } catch(Throwable t) {
+                //a scheduled task that throws is never run again
+                log.error("Error logging server stats", t);
+            }
+        }, interval.toMillis(), interval.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Sets the stats line intervals, before the server runs; for tests.
+     */
+    void setStatsIntervals(Duration healthStatsInterval, Duration usageStatsInterval) {
+        this.healthStatsInterval = healthStatsInterval;
+        this.usageStatsInterval = usageStatsInterval;
+    }
+
+    /**
      * @return the sessions currently connected
      */
     public Set<RequestHandler> getSessions() {
@@ -177,6 +234,9 @@ public class ElectrumServerRunnable implements Runnable {
 
     public synchronized void stop() {
         stopped = true;
+        if(statsExecutor != null) {
+            statsExecutor.shutdownNow();
+        }
         for(ServerSocket ss : serverSockets) {
             try {
                 ss.close();

@@ -496,6 +496,7 @@ public class Config {
         private Integer backendReconnectMaxBackoffSeconds;
         private Integer backendPingIntervalSeconds;
         private Integer sslReloadSeconds;
+        private Boolean healthStatsEnabled;
         private Boolean backendSslVerify;
         private String backendSslCertFile;
 
@@ -737,6 +738,17 @@ public class Config {
         @JsonIgnore
         public File getBackendSslCertFileObj() {
             return backendSslCertFile == null || backendSslCertFile.isBlank() ? null : resolveFrigateDirPath(backendSslCertFile, backendSslCertFile);
+        }
+
+        /**
+         * @return whether to log the server health line every five minutes
+         */
+        public boolean isHealthStatsEnabled() {
+            return healthStatsEnabled == null || healthStatsEnabled;
+        }
+
+        public void setHealthStatsEnabled(Boolean healthStatsEnabled) {
+            this.healthStatsEnabled = healthStatsEnabled;
         }
 
         public int getSslReloadSeconds() {
