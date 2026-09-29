@@ -49,6 +49,20 @@ public class ScriptHashSubscriptions {
         return statuses.remove(scriptHash) != null;
     }
 
+    /**
+     * Removes every subscription, as when the session closes.
+     * @return the number of subscriptions removed
+     */
+    public int unsubscribeAll() {
+        int removed = 0;
+        for(String scriptHash : getScriptHashes()) {
+            if(unsubscribe(scriptHash)) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     public boolean isSubscribed(String scriptHash) {
         return statuses.containsKey(scriptHash);
     }

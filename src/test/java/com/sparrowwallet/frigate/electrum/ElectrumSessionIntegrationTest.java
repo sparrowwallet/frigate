@@ -336,6 +336,66 @@ public class ElectrumSessionIntegrationTest {
         assertEquals(2, server.getConnectionGate().getConnectionCount());
     }
 
+    private static void assertSubscriptionLimitError(JsonNode response) {
+        assertEquals(-32005, errorCode(response), response.toString());
+        assertEquals("subscription limit exceeded", response.path("error").path("message").asText());
+    }
+
+    @Test
+    public void subscriptionsBeyondSessionCapAreRefused() throws Exception {
+        Config.get().getLimits().setMaxSubscriptionsPerSession(3);
+        TestElectrumClient client = connectClient();
+        for(int i = 0; i < 3; i++) {
+            subscribe(client, scriptHash(i));
+        }
+
+        assertSubscriptionLimitError(client.request("blockchain.scripthash.subscribe", scriptHash(3)));
+        //the refused subscription never reached the backend
+        assertTrue(backend.getSubscribedConnections(scriptHash(3)).isEmpty());
+        //a subscription the client already has is not counted again
+        subscribe(client, scriptHash(0));
+
+        //an unsubscribe frees a slot
+        client.request("blockchain.scripthash.unsubscribe", scriptHash(0));
+        subscribe(client, scriptHash(3));
+        assertEquals(3, server.getConnectionGate().getSubscriptionCount());
+    }
+
+    @Test
+    public void subscriptionsBeyondGlobalCapAreRefusedUntilReleased() throws Exception {
+        Config.get().getLimits().setMaxSubscriptions(3L);
+        startServer();
+        TestElectrumClient first = connectClient();
+        subscribe(first, scriptHash(0));
+        subscribe(first, scriptHash(1));
+        TestElectrumClient second = connectClient();
+        subscribe(second, scriptHash(2));
+
+        assertSubscriptionLimitError(second.request("blockchain.scripthash.subscribe", scriptHash(3)));
+
+        //a disconnecting client's subscriptions are released
+        first.close();
+        await(() -> server.getConnectionGate().getSubscriptionCount() == 1, "subscriptions of disconnected client to be released");
+        subscribe(second, scriptHash(3));
+        assertEquals(2, server.getConnectionGate().getSubscriptionCount());
+    }
+
+    @Test
+    public void failedSubscribeDoesNotLeakReservation() throws Exception {
+        TestElectrumClient client = connectClient();
+        subscribe(client, scriptHash(0));
+        assertEquals(1, server.getConnectionGate().getSubscriptionCount());
+
+        backend.setAccepting(false);
+        backend.dropAllConnections();
+        await(() -> backend.getOpenConnections().isEmpty(), "backend connections to drop");
+
+        //a new subscription fails with the backend down, and its reservation is given back
+        assertEquals(-32000, errorCode(client.request("blockchain.scripthash.subscribe", scriptHash(1))));
+        assertEquals(1, server.getConnectionGate().getSubscriptionCount());
+        backend.setAccepting(true);
+    }
+
     @Test
     public void idleClientIsDisconnected() throws Exception {
         Config.get().getLimits().setSessionTimeoutSeconds(1);

@@ -102,6 +102,119 @@ public class ConnectionGateTest {
     }
 
     @Test
+    public void globalSubscriptionCapIsEnforced() throws Exception {
+        ConnectionGate gate = new ConnectionGate(100, 100, 3, 100);
+        ConnectionGate.IpKey first = ConnectionGate.IpKey.of(address("10.0.0.1"));
+        ConnectionGate.IpKey second = ConnectionGate.IpKey.of(address("10.0.0.2"));
+
+        assertTrue(gate.tryReserveSubscription(first));
+        assertTrue(gate.tryReserveSubscription(first));
+        assertTrue(gate.tryReserveSubscription(second));
+        assertFalse(gate.tryReserveSubscription(second));
+        assertEquals(3, gate.getSubscriptionCount());
+
+        gate.releaseSubscriptions(first, 1);
+        assertTrue(gate.tryReserveSubscription(second));
+    }
+
+    @Test
+    public void perIpSubscriptionCapIsEnforced() throws Exception {
+        ConnectionGate gate = new ConnectionGate(100, 100, 1000, 2);
+        ConnectionGate.IpKey first = ConnectionGate.IpKey.of(address("10.0.0.1"));
+        ConnectionGate.IpKey second = ConnectionGate.IpKey.of(address("10.0.0.2"));
+
+        assertTrue(gate.tryReserveSubscription(first));
+        assertTrue(gate.tryReserveSubscription(first));
+        assertFalse(gate.tryReserveSubscription(first));
+        //a refused reservation does not use a global slot
+        assertEquals(2, gate.getSubscriptionCount());
+        assertTrue(gate.tryReserveSubscription(second));
+
+        gate.releaseSubscriptions(first, 2);
+        assertEquals(0, gate.getSubscriptionCount(first));
+        assertEquals(1, gate.getSubscriptionCount());
+        assertTrue(gate.tryReserveSubscription(first));
+    }
+
+    @Test
+    public void loopbackIsExemptFromPerIpSubscriptionCapButNotGlobalCap() throws Exception {
+        ConnectionGate gate = new ConnectionGate(100, 100, 4, 1);
+        ConnectionGate.IpKey loopback = ConnectionGate.IpKey.of(InetAddress.getLoopbackAddress());
+
+        for(int i = 0; i < 4; i++) {
+            assertTrue(gate.tryReserveSubscription(loopback));
+        }
+        assertFalse(gate.tryReserveSubscription(loopback));
+    }
+
+    @Test
+    public void releasingNothingIsIgnored() throws Exception {
+        ConnectionGate gate = new ConnectionGate(100, 100, 10, 10);
+        ConnectionGate.IpKey key = ConnectionGate.IpKey.of(address("10.0.0.1"));
+
+        gate.releaseSubscriptions(key, 0);
+
+        assertEquals(0, gate.getSubscriptionCount());
+        assertEquals(0, gate.getSubscriptionCount(key));
+    }
+
+    @Test
+    public void concurrentSubscriptionReservationsRespectCaps() throws Exception {
+        int maxSubscriptions = 10;
+        int maxSubscriptionsPerIp = 3;
+        ConnectionGate gate = new ConnectionGate(100, 100, maxSubscriptions, maxSubscriptionsPerIp);
+        List<ConnectionGate.IpKey> keys = List.of(ConnectionGate.IpKey.of(address("10.0.0.1")), ConnectionGate.IpKey.of(address("10.0.0.2")),
+                ConnectionGate.IpKey.of(address("10.0.0.3")), ConnectionGate.IpKey.of(address("2001:db8::1")), ConnectionGate.IpKey.of(InetAddress.getLoopbackAddress()));
+
+        //reservations actually held, counted by the test, as the gate's global count can briefly exceed its cap while a refusal backs out
+        AtomicInteger held = new AtomicInteger();
+        ConcurrentHashMap<ConnectionGate.IpKey, AtomicInteger> heldPerIp = new ConcurrentHashMap<>();
+        AtomicInteger maxHeld = new AtomicInteger();
+        AtomicInteger overPerIpCap = new AtomicInteger();
+        AtomicInteger refused = new AtomicInteger();
+        CountDownLatch start = new CountDownLatch(1);
+        List<Thread> threads = new ArrayList<>();
+
+        for(int t = 0; t < 32; t++) {
+            threads.add(Thread.ofPlatform().start(() -> {
+                try {
+                    start.await();
+                    for(int i = 0; i < 20_000; i++) {
+                        ConnectionGate.IpKey key = keys.get(ThreadLocalRandom.current().nextInt(keys.size()));
+                        if(!gate.tryReserveSubscription(key)) {
+                            refused.incrementAndGet();
+                            continue;
+                        }
+                        maxHeld.accumulateAndGet(held.incrementAndGet(), Math::max);
+                        AtomicInteger ipHeld = heldPerIp.computeIfAbsent(key, k -> new AtomicInteger());
+                        if(ipHeld.incrementAndGet() > maxSubscriptionsPerIp && !key.loopback()) {
+                            overPerIpCap.incrementAndGet();
+                        }
+                        Thread.yield();
+                        ipHeld.decrementAndGet();
+                        held.decrementAndGet();
+                        gate.releaseSubscriptions(key, 1);
+                    }
+                } catch(InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+        }
+        start.countDown();
+        for(Thread thread : threads) {
+            thread.join();
+        }
+
+        assertTrue(maxHeld.get() <= maxSubscriptions, "held " + maxHeld.get() + " reservations at once");
+        assertEquals(0, overPerIpCap.get());
+        assertTrue(refused.get() > 0);
+        assertEquals(0, gate.getSubscriptionCount());
+        for(ConnectionGate.IpKey key : keys) {
+            assertEquals(0, gate.getSubscriptionCount(key));
+        }
+    }
+
+    @Test
     public void concurrentAcquireAndReleaseRespectCapsAndLeaveNoCounts() throws Exception {
         //more threads than the global cap, so it is contended; loopback is uncapped per IP, so the global cap binds too
         int maxConnections = 10;

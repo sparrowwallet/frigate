@@ -279,7 +279,7 @@ public class ElectrumServerService {
     }
 
     @JsonRpcMethod("blockchain.scripthash.subscribe")
-    public String subscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) {
+    public String subscribeScriptHash(@JsonRpcParam("scripthash") String scriptHash) throws SubscriptionLimitException {
         checkVersionNegotiated();
         if(electrumBackendService != null) {
             boolean added = requestHandler.subscribeScriptHash(scriptHash);

@@ -108,7 +108,7 @@ public class RequestHandlerTest {
         client = new TestElectrumClient(clientSocket, listener.getLocalPort(), receiveBufferSize);
         Socket serverSide = listener.accept();
 
-        handler = new RequestHandler(serverSide, null, null);
+        handler = new RequestHandler(serverSide, null, null, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()));
         handlerThread = Thread.ofVirtual().name("TestRequestHandler").start(handler);
         client.request("server.version", "TestWallet", "1.4");
     }

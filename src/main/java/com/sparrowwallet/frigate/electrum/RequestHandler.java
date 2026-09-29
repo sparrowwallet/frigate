@@ -52,6 +52,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final JsonRpcServer rpcServer = new JsonRpcServer();
     private final AtomicBoolean disconnected = new AtomicBoolean(false);
     private final BackendSession backendSession;
+    private final ConnectionGate connectionGate;
+    private final ConnectionGate.IpKey ipKey;
+    private final int maxSubscriptionsPerSession;
     private final HeadersDispatcher headersDispatcher;
 
     private boolean connected;
@@ -67,8 +70,15 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final ElectrumNotificationService notificationService;
     private final AsyncNotifier notifier;
 
-    public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier) {
+    /**
+     * @param connectionGate the server's gate, where this session reserves its scripthash subscriptions against the per-IP and global caps
+     * @param ipKey the client's key in the connection gate
+     */
+    public RequestHandler(Socket clientSocket, BitcoindClient bitcoindClient, IndexQuerier indexQuerier, ConnectionGate connectionGate, ConnectionGate.IpKey ipKey) {
         this.clientSocket = clientSocket;
+        this.connectionGate = connectionGate;
+        this.ipKey = ipKey;
+        this.maxSubscriptionsPerSession = Config.get().getLimits().getMaxSubscriptionsPerSession();
         this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
         Config.ServerConfig serverConfig = Config.get().getServer();
         Server backendServer = serverConfig.getBackendElectrumServerObj();
@@ -160,6 +170,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             if(backendSession != null) {
                 backendSession.close();
             }
+            connectionGate.releaseSubscriptions(ipKey, scriptHashSubscriptions.unsubscribeAll());
             this.connected = false;
             this.disconnected.set(true);
             Frigate.getEventBus().unregister(this);
@@ -284,10 +295,29 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     /**
      * Called before the backend subscribe request is sent. Statuses for the scripthash are held back from the client until the
      * response has been written, see AsyncNotifier.
+     *
+     * A new subscription is counted against the per-session cap, and reserved against the per-IP and global caps in the connection
+     * gate; a subscription the client already has is not counted again. Subscriptions are only added and removed on the request
+     * thread, so the reservations held always equal the session's subscription count.
      * @return true if the subscription was added, false if the client was already subscribed
+     * @throws SubscriptionLimitException if a new subscription would exceed a limit
      */
-    public boolean subscribeScriptHash(String scriptHash) {
+    public boolean subscribeScriptHash(String scriptHash) throws SubscriptionLimitException {
+        boolean reserved = false;
+        if(!scriptHashSubscriptions.isSubscribed(scriptHash)) {
+            if(scriptHashSubscriptions.size() >= maxSubscriptionsPerSession) {
+                throw new SubscriptionLimitException("limit of " + maxSubscriptionsPerSession + " subscriptions per connection reached");
+            }
+            if(!connectionGate.tryReserveSubscription(ipKey)) {
+                throw new SubscriptionLimitException("server subscription limit reached");
+            }
+            reserved = true;
+        }
+
         boolean added = scriptHashSubscriptions.subscribe(scriptHash);
+        if(reserved && !added) {
+            connectionGate.releaseSubscriptions(ipKey, 1);
+        }
         notifier.hold(scriptHash);
         heldForResponse.add(scriptHash);
         return added;
@@ -302,8 +332,14 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     }
 
     public void unsubscribeScriptHash(String scriptHash) {
-        scriptHashSubscriptions.unsubscribe(scriptHash);
+        if(scriptHashSubscriptions.unsubscribe(scriptHash)) {
+            connectionGate.releaseSubscriptions(ipKey, 1);
+        }
         notifier.discardScriptHash(scriptHash);
+    }
+
+    public int getScriptHashSubscriptionCount() {
+        return scriptHashSubscriptions.size();
     }
 
     @Override

@@ -48,7 +48,7 @@ public class ElectrumServerRunnable implements Runnable {
         this.tcpBind = tcpBind;
         this.sslBind = sslBind;
         Config.LimitsConfig limits = Config.get().getLimits();
-        this.connectionGate = new ConnectionGate(limits.getMaxConnections(), limits.getMaxConnectionsPerIp());
+        this.connectionGate = new ConnectionGate(limits.getMaxConnections(), limits.getMaxConnectionsPerIp(), limits.getMaxSubscriptions(), limits.getMaxSubscriptionsPerIp());
 
         if(tcpBind == null && sslBind == null) {
             throw new ConfigurationException("At least one of tcp or ssl must be enabled under [server] in config.toml");
@@ -138,7 +138,7 @@ public class ElectrumServerRunnable implements Runnable {
     private void runSession(Socket clientSocket, ConnectionGate.IpKey ipKey) {
         RequestHandler requestHandler = null;
         try {
-            requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier);
+            requestHandler = new RequestHandler(clientSocket, bitcoindClient, indexQuerier, connectionGate, ipKey);
             sessions.add(requestHandler);
             requestHandler.run();
         } catch(RuntimeException e) {
