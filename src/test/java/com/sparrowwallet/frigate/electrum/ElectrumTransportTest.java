@@ -289,6 +289,30 @@ public class ElectrumTransportTest {
     }
 
     @Test
+    public void oversizedLineFromBackendClosesConnection() throws Exception {
+        transport = new ElectrumTransport(server.getHostAndPort(), Protocol.TCP, subscriptionService, 5000, 100);
+        transport.connect();
+        reader = Thread.ofVirtual().name("TestReader").start(transport::readInputLoop);
+        server.setResponder(line -> List.of(response(idOf(line), "\"" + "x".repeat(200) + "\"")));
+
+        BackendUnavailableException e = assertThrows(BackendUnavailableException.class, () -> transport.pass(request(16, "server.ping")));
+
+        assertEquals("connection lost", e.getReason());
+        assertTrue(reader.join(java.time.Duration.ofSeconds(5)));
+        assertInstanceOf(com.sparrowwallet.frigate.io.LineTooLongException.class, transport.getLastException());
+        assertFalse(transport.isConnected());
+    }
+
+    @Test
+    public void lineWithinLimitFromBackendIsAccepted() throws Exception {
+        transport = new ElectrumTransport(server.getHostAndPort(), Protocol.TCP, subscriptionService, 5000, 100);
+        transport.connect();
+        reader = Thread.ofVirtual().name("TestReader").start(transport::readInputLoop);
+
+        assertEquals(response("17", "\"ok\""), transport.pass(request(17, "server.ping")));
+    }
+
+    @Test
     public void stalledTlsHandshakeTimesOut() throws Exception {
         try(SilentServer silent = new SilentServer(0)) {
             transport = new ElectrumTransport(silent.getHostAndPort(), Protocol.SSL, subscriptionService, 300);

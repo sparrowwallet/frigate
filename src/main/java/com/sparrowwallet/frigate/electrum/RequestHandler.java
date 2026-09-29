@@ -11,7 +11,9 @@ import com.sparrowwallet.frigate.bitcoind.BitcoindClient;
 import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncStart;
 import com.sparrowwallet.frigate.bitcoind.BlockReorgSyncComplete;
 import com.sparrowwallet.frigate.index.*;
+import com.sparrowwallet.frigate.io.BoundedLineReader;
 import com.sparrowwallet.frigate.io.Config;
+import com.sparrowwallet.frigate.io.LineTooLongException;
 import com.sparrowwallet.frigate.io.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +38,12 @@ import java.util.stream.Collectors;
 
 public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDispatcher.Subscriber {
     private static final Logger log = LoggerFactory.getLogger(RequestHandler.class);
+    private static final String REQUEST_TOO_LARGE = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"request too large\"},\"id\":null}";
+    //bounds on draining the rest of an oversized request so its error is not lost to a reset: the deadline bounds the time a
+    //client that keeps its connection open can hold the session, and the budget the data read from one that keeps sending
+    private static final long OVERSIZED_REQUEST_DRAIN_NANOS = TimeUnit.SECONDS.toNanos(2);
+    private static final long OVERSIZED_REQUEST_DRAIN_BYTES = 16 * 1024 * 1024;
+    private static final String PARSE_ERROR = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":\"Parse error\"},\"id\":null}";
     private final Socket clientSocket;
     private final ElectrumServerService electrumServerService;
     private final JsonRpcServer rpcServer = new JsonRpcServer();
@@ -87,8 +95,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         notifier.start();
 
         try {
-            InputStream input = clientSocket.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8));
+            BoundedLineReader reader = new BoundedLineReader(clientSocket.getInputStream(), Config.get().getLimits().getMaxRequestBytes());
 
             OutputStream output = clientSocket.getOutputStream();
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(output, StandardCharsets.UTF_8)));
@@ -98,14 +105,23 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             while(true) {
                 postResponseTasks.clear();
 
-                String request = reader.readLine();
+                String request;
+                try {
+                    request = reader.readLine();
+                } catch(LineTooLongException e) {
+                    //recovery inside an oversized line is not meaningfully possible, so report it and disconnect
+                    log.warn("Disconnecting client " + clientSocket.getRemoteSocketAddress() + ": request exceeds " + e.getMaxLineBytes() + " bytes");
+                    rejectOversizedRequest();
+                    break;
+                }
                 if(request == null) {
                     break;
                 }
 
-                // Skip requests with null bytes or other control characters
+                // Reject requests with null bytes or other control characters
                 if(request.indexOf(0) >= 0 || request.chars().anyMatch(c -> c < 32 && c != '\t' && c != '\r' && c != '\n')) {
-                    log.warn("Skipping malformed request with control characters");
+                    log.warn("Rejecting malformed request with control characters");
+                    writeLine(PARSE_ERROR);
                     continue;
                 }
 
@@ -135,6 +151,46 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             }
 
             closeClientSocket(notifier.isDelivering());
+        }
+    }
+
+    /**
+     * Sends the request too large error and prepares the connection to close so the client can receive it. The rest of the
+     * oversized request is still arriving, and closing a socket with unread input sends a TCP reset, which can make the client
+     * discard the error unread. So output is shut down first, sending the error and a FIN at once, and the remaining input is
+     * drained (bounded by a byte budget and a deadline) before the session closes. Best effort: a request much larger than the
+     * budget still ends in a reset, though the client has had the drain period to read the error.
+     * If the notifier is blocked mid-write, the error is not sent, as shutting down output would truncate that notification;
+     * the session then ends with an abortive close.
+     */
+    private void rejectOversizedRequest() {
+        notifier.close();
+        if(notifier.isDelivering()) {
+            return;
+        }
+
+        writeLine(REQUEST_TOO_LARGE);
+        try {
+            clientSocket.shutdownOutput();
+            byte[] scratch = new byte[8192];
+            InputStream input = clientSocket.getInputStream();
+            long deadline = System.nanoTime() + OVERSIZED_REQUEST_DRAIN_NANOS;
+            long drained = 0;
+            while(drained < OVERSIZED_REQUEST_DRAIN_BYTES) {
+                long remainingMillis = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime());
+                if(remainingMillis <= 0) {
+                    break;
+                }
+                clientSocket.setSoTimeout((int)remainingMillis);
+                int read = input.read(scratch);
+                if(read < 0) {
+                    break;
+                }
+                drained += read;
+            }
+        } catch(IOException | UnsupportedOperationException e) {
+            //timed out, reset by the client, or half-close unsupported by the socket: close regardless
+            log.debug("Stopped draining oversized request: {}", e.getMessage());
         }
     }
 

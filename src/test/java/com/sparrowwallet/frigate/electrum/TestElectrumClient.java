@@ -84,6 +84,16 @@ public class TestElectrumClient implements Closeable {
         return request;
     }
 
+    /** Sends a raw line, which need not be valid JSON-RPC. */
+    public void sendRaw(String line) {
+        write(line);
+    }
+
+    /** @return the next response, such as an error response without an id, or null if none arrives within the timeout */
+    public JsonNode pollResponse(long timeout, TimeUnit unit) throws InterruptedException {
+        return responses.poll(timeout, unit);
+    }
+
     private synchronized void write(String line) {
         out.print(line + "\n");
         out.flush();

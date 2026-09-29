@@ -6,6 +6,7 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.github.arteam.simplejsonrpc.client.Transport;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.net.HostAndPort;
+import com.sparrowwallet.frigate.io.BoundedLineReader;
 import com.sparrowwallet.frigate.io.Protocol;
 import com.sparrowwallet.frigate.io.SslUtil;
 import org.slf4j.Logger;
@@ -50,6 +51,13 @@ public class ElectrumTransport implements Transport, Closeable {
     private static final Pattern ID_PATTERN = Pattern.compile("\"id\"\\s*:\\s*(\\d+)");
     private static final JsonFactory JSON_FACTORY = new JsonFactory();
 
+    /**
+     * The maximum length of a message read from the server. Legitimate responses can be several megabytes (the history of a busy
+     * address, for example), so this is far above any real message, while still bounding the memory a faulty server can consume.
+     * A longer line closes the connection.
+     */
+    public static final int MAX_LINE_BYTES = 64 * 1024 * 1024;
+
     private static final AtomicLong READ_SEQUENCE = new AtomicLong();
     private static final ThreadLocal<Long> DELIVERED_SEQUENCE = ThreadLocal.withInitial(() -> 0L);
     private static final ScheduledExecutorService WRITE_WATCHDOG = Executors.newSingleThreadScheduledExecutor(r -> {
@@ -62,6 +70,7 @@ public class ElectrumTransport implements Transport, Closeable {
     private final Protocol protocol;
     private final Object subscriptionService;
     private final long requestTimeoutMillis;
+    private final int maxLineBytes;
 
     private final JsonRpcServer jsonRpcServer = new JsonRpcServer();
     private final ReentrantLock clientRequestLock = new ReentrantLock();
@@ -83,10 +92,15 @@ public class ElectrumTransport implements Transport, Closeable {
      *                             fresh connection cannot deliver its late response.
      */
     public ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis) {
+        this(electrumServer, protocol, subscriptionService, requestTimeoutMillis, MAX_LINE_BYTES);
+    }
+
+    ElectrumTransport(HostAndPort electrumServer, Protocol protocol, Object subscriptionService, long requestTimeoutMillis, int maxLineBytes) {
         this.electrumServer = electrumServer;
         this.protocol = protocol;
         this.subscriptionService = subscriptionService;
         this.requestTimeoutMillis = requestTimeoutMillis;
+        this.maxLineBytes = maxLineBytes;
     }
 
     /**
@@ -135,7 +149,7 @@ public class ElectrumTransport implements Transport, Closeable {
             throw new IOException("Error connecting to Electrum server " + electrumServer + ": " + e.getMessage(), e);
         }
 
-        Connection newConnection = new Connection(newSocket);
+        Connection newConnection = new Connection(newSocket, maxLineBytes);
         Connection previous = connection;
         if(previous != null) {
             previous.close();
@@ -273,7 +287,8 @@ public class ElectrumTransport implements Transport, Closeable {
                 lastException = e;
             }
         } finally {
-            current.open = false;
+            //closes the socket too, as a connection can end with its socket still usable, such as after an oversized line
+            current.close();
             responses.add(Message.connectionLost(current));
         }
     }
@@ -334,13 +349,13 @@ public class ElectrumTransport implements Transport, Closeable {
     private static final class Connection {
         private final Socket socket;
         private final PrintWriter out;
-        private final BufferedReader in;
+        private final BoundedLineReader in;
         private volatile boolean open = true;
 
-        Connection(Socket socket) throws IOException {
+        Connection(Socket socket, int maxLineBytes) throws IOException {
             this.socket = socket;
             this.out = new PrintWriter(new BufferedWriter(new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8)));
-            this.in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+            this.in = new BoundedLineReader(socket.getInputStream(), maxLineBytes);
         }
 
         /**

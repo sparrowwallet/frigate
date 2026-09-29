@@ -1,6 +1,11 @@
 package com.sparrowwallet.frigate.electrum;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import com.sparrowwallet.frigate.io.Config;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,6 +29,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * routing and backend resilience end to end.
  */
 public class ElectrumSessionIntegrationTest {
+    private static final int MAX_REQUEST_BYTES = 4000;
+
     private FakeElectrumBackend backend;
     private ElectrumServerRunnable server;
     private final List<TestElectrumClient> clients = new ArrayList<>();
@@ -35,6 +42,7 @@ public class ElectrumSessionIntegrationTest {
         config.getServer().setBackendElectrumServer(backend.getUrl());
         config.getServer().setBackendRequestTimeoutSeconds(5);
         config.getServer().setBackendReconnectMaxBackoffSeconds(1);
+        config.getLimits().setMaxRequestBytes(MAX_REQUEST_BYTES);
         Config.setInstance(config);
 
         server = new ElectrumServerRunnable(null, null, new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), null, null);
@@ -212,11 +220,68 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void oversizedRequestIsRejectedAndDisconnected() throws Exception {
+        //a raw socket that nothing reads until the session has ended, like a client still busy writing a large request
+        try(Socket socket = new Socket(InetAddress.getLoopbackAddress(), server.getTcpLocalPort())) {
+            OutputStream out = socket.getOutputStream();
+            //far larger than the server reads before rejecting it, so most of it is unread when the session closes
+            byte[] request = ("{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"server.ping\",\"params\":[\"" + "x".repeat(50 * MAX_REQUEST_BYTES) + "\"]}\n")
+                    .getBytes(StandardCharsets.UTF_8);
+            Thread writer = Thread.ofVirtual().start(() -> {
+                try {
+                    out.write(request);
+                    out.flush();
+                } catch(IOException e) {
+                    //the server may reset the connection before the whole request is written
+                }
+            });
+            writer.join(java.time.Duration.ofSeconds(10));
+            //past the server's drain deadline, so the session has closed before the client reads
+            Thread.sleep(3000);
+
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+            JsonNode error = new ObjectMapper().readTree(in.readLine());
+            assertEquals(-32600, errorCode(error));
+            assertEquals("request too large", error.path("error").path("message").asText());
+            assertTrue(error.path("id").isNull());
+            assertNull(in.readLine());
+        }
+    }
+
+    @Test
+    public void requestAtLimitIsAccepted() throws Exception {
+        TestElectrumClient client = connectClient();
+        String prefix = "{\"jsonrpc\":\"2.0\",\"id\":98,\"method\":\"blockchain.scripthash.get_history\",\"params\":[\"";
+        String suffix = "\"]}";
+        client.sendRaw(prefix + "x".repeat(MAX_REQUEST_BYTES - prefix.length() - suffix.length()) + suffix);
+
+        JsonNode response = client.awaitResponse(98);
+        assertFalse(response.has("error") && !response.get("error").isNull(), response.toString());
+    }
+
+    @Test
+    public void requestWithControlCharactersGetsParseError() throws Exception {
+        TestElectrumClient client = connectClient();
+
+        client.sendRaw("{\"jsonrpc\":\"2.0\",\"id\":97,\"method\":\"server.ping\",\"params\":[\"\u0001\"]}");
+
+        JsonNode error = client.pollResponse(5, TimeUnit.SECONDS);
+        assertNotNull(error);
+        assertEquals(-32700, errorCode(error));
+        assertTrue(error.path("id").isNull());
+        //the session continues
+        assertTrue(client.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
+    }
+
+    @Test
     public void slowClientDoesNotDelayOtherSessions() throws Exception {
         List<String> slowScriptHashes = IntStream.range(0, 2000).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
         TestElectrumClient slow = connectClient(4096);
-        JsonNode subscribed = slow.requestBatch("blockchain.scripthash.subscribe", slowScriptHashes);
-        assertEquals(slowScriptHashes.size(), subscribed.size());
+        //in batches that fit within the request size limit
+        for(int i = 0; i < slowScriptHashes.size(); i += 25) {
+            List<String> batch = slowScriptHashes.subList(i, Math.min(i + 25, slowScriptHashes.size()));
+            assertEquals(batch.size(), slow.requestBatch("blockchain.scripthash.subscribe", batch).size());
+        }
         TestElectrumClient healthy = connectClient();
         String healthyScriptHash = scriptHash(5000);
         subscribe(healthy, healthyScriptHash);
