@@ -10,7 +10,7 @@ import java.nio.file.Path;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class ServerBannerTest {
-    private static final String FALLBACK = "Frigate 1.5.3";
+    private static final String FALLBACK = "Default banner";
 
     @TempDir
     Path dir;
