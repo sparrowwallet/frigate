@@ -31,7 +31,7 @@ public class TokenBucketTest {
     public void startsFull() throws Exception {
         TokenBucket bucket = bucket(100, 10);
 
-        bucket.acquire(100);
+        assertFalse(bucket.acquire(100));
 
         assertTrue(sleeps.isEmpty());
         assertEquals(0, bucket.getTokens(), 1e-9);
@@ -43,7 +43,7 @@ public class TokenBucketTest {
         bucket.acquire(10);
 
         //5 tokens at 10 per second take 500ms to refill
-        bucket.acquire(5);
+        assertTrue(bucket.acquire(5));
 
         assertEquals(List.of(500L), sleeps);
         assertEquals(0, bucket.getTokens(), 1e-9);
@@ -109,7 +109,7 @@ public class TokenBucketTest {
         TokenBucket bucket = bucket(10, 10);
         bucket.acquire(10);
 
-        bucket.acquire(0);
+        assertFalse(bucket.acquire(0));
 
         assertTrue(sleeps.isEmpty());
     }

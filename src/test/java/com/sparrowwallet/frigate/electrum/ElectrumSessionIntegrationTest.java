@@ -410,6 +410,7 @@ public class ElectrumSessionIntegrationTest {
         Config.get().getLimits().setRequestTokensPerSecond(10);
         TestElectrumClient paced = connectClient();
         TestElectrumClient other = connectClient();
+        long pacedBefore = server.getStats().requestsPaced();
 
         //the bucket holds at most 5 tokens when the requests start (server.version took one, which may have refilled while the second
         //client connected), so at least 19 of the 24 requests wait for refills: at least 1.9 seconds at 10 per second, asserted
@@ -430,6 +431,9 @@ public class ElectrumSessionIntegrationTest {
         }
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
         assertTrue(elapsedMillis >= 1800 && elapsedMillis < 5000, "elapsed " + elapsedMillis + "ms");
+        //the requests that waited for tokens are counted: at least the 19 beyond the bucket's 5, and none of the other client's
+        long delayed = server.getStats().requestsPaced() - pacedBefore;
+        assertTrue(delayed >= 19 && delayed <= 24, "delayed " + delayed);
     }
 
     @Test

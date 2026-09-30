@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class ServerStatsLogTest {
     private static ServerStats stats(int sessions, int backendConnected, long notifications, long reconnects, long timeouts) {
-        return new ServerStats(sessions, 94, 3402, 27, 4, notifications, true, sessions, backendConnected, reconnects, timeouts, 915_000, 914_999, 45_678);
+        return new ServerStats(sessions, 94, 3402, 27, 4, notifications, true, sessions, backendConnected, reconnects, timeouts, 915_000, 914_999, 45_678, 0);
     }
 
     @Test
@@ -42,17 +42,17 @@ public class ServerStatsLogTest {
 
     @Test
     public void healthLineOmitsAbsentParts() {
-        ServerStats noBackend = new ServerStats(3, 2, 5, 0, 2, 9, false, 0, 0, 0, 0, 915_000, 915_000, 1);
+        ServerStats noBackend = new ServerStats(3, 2, 5, 0, 2, 9, false, 0, 0, 0, 0, 915_000, 915_000, 1, 0);
         assertEquals(Optional.of("Server health: index 915,000 of tip 915,000, mempool 1 tx"), ServerStatsLog.formatHealth(noBackend, noBackend, 300));
 
-        ServerStats nothing = new ServerStats(3, 2, 5, 0, 2, 9, false, 0, 0, 0, 0, null, null, null);
+        ServerStats nothing = new ServerStats(3, 2, 5, 0, 2, 9, false, 0, 0, 0, 0, null, null, null, 0);
         assertEquals(Optional.empty(), ServerStatsLog.formatHealth(nothing, nothing, 300));
     }
 
     @Test
     public void usageLineIsRoundedAndSuppressesSmallCounts() {
-        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 1000, true, 0, 0, 0, 0, null, null, null);
-        ServerStats current = new ServerStats(124, 94, 3402, 7, 0, 13_206, true, 124, 124, 0, 0, null, null, null);
+        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 1000, true, 0, 0, 0, 0, null, null, null, 0);
+        ServerStats current = new ServerStats(124, 94, 3402, 7, 0, 13_206, true, 124, 124, 0, 0, null, null, null, 0);
 
         //7 silent payments subscriptions are below the threshold and left out; the rest are rounded to the nearest ten
         assertEquals(Optional.of("Aggregate server stats: now [sessions:120, IPs:90, scripthash subscriptions:3400] "
@@ -60,19 +60,28 @@ public class ServerStatsLogTest {
     }
 
     @Test
+    public void usageLineReportsPacedRequestsOverTheHour() {
+        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 1000, true, 0, 0, 0, 0, null, null, null, 250);
+        ServerStats current = new ServerStats(124, 94, 3402, 0, 0, 1004, true, 124, 124, 0, 0, null, null, null, 4_318);
+
+        assertEquals(Optional.of("Aggregate server stats: now [sessions:120, IPs:90, scripthash subscriptions:3400] "
+                + "last 1h [requests delayed by pacing:4070]"), ServerStatsLog.formatUsage(current, previous, 0));
+    }
+
+    @Test
     public void usageLineOmitsEmptyGroup() {
-        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 13_000, true, 0, 0, 0, 0, null, null, null);
-        ServerStats quiet = new ServerStats(124, 94, 3402, 0, 0, 13_004, true, 124, 124, 0, 0, null, null, null);
+        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 13_000, true, 0, 0, 0, 0, null, null, null, 0);
+        ServerStats quiet = new ServerStats(124, 94, 3402, 0, 0, 13_004, true, 124, 124, 0, 0, null, null, null, 0);
         assertEquals(Optional.of("Aggregate server stats: now [sessions:120, IPs:90, scripthash subscriptions:3400]"), ServerStatsLog.formatUsage(quiet, previous, 2));
 
-        ServerStats emptied = new ServerStats(3, 2, 5, 0, 0, 13_500, true, 3, 3, 0, 0, null, null, null);
+        ServerStats emptied = new ServerStats(3, 2, 5, 0, 0, 13_500, true, 3, 3, 0, 0, null, null, null, 0);
         assertEquals(Optional.of("Aggregate server stats: last 1h [notifications:500]"), ServerStatsLog.formatUsage(emptied, previous, 0));
     }
 
     @Test
     public void usageLineIsOmittedWhenAllCountsAreSmall() {
-        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 100, true, 0, 0, 0, 0, null, null, null);
-        ServerStats current = new ServerStats(2, 1, 9, 1, 0, 104, true, 2, 2, 0, 0, null, null, null);
+        ServerStats previous = new ServerStats(0, 0, 0, 0, 0, 100, true, 0, 0, 0, 0, null, null, null, 0);
+        ServerStats current = new ServerStats(2, 1, 9, 1, 0, 104, true, 2, 2, 0, 0, null, null, null, 0);
 
         assertEquals(Optional.empty(), ServerStatsLog.formatUsage(current, previous, 3));
     }

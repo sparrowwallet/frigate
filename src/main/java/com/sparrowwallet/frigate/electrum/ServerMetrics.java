@@ -11,6 +11,7 @@ public final class ServerMetrics {
     private static final LongAdder NOTIFICATIONS_DELIVERED = new LongAdder();
     private static final LongAdder BACKEND_RECONNECTS = new LongAdder();
     private static final LongAdder BACKEND_TIMEOUTS = new LongAdder();
+    private static final LongAdder REQUESTS_PACED = new LongAdder();
     private static final LongAccumulator NOTIFIER_QUEUE_HIGH_WATER = new LongAccumulator(Math::max, 0);
 
     private ServerMetrics() {
@@ -28,6 +29,10 @@ public final class ServerMetrics {
         BACKEND_TIMEOUTS.increment();
     }
 
+    static void requestsPaced(long requests) {
+        REQUESTS_PACED.add(requests);
+    }
+
     static void notifierQueueDepth(int depth) {
         NOTIFIER_QUEUE_HIGH_WATER.accumulate(depth);
     }
@@ -42,6 +47,13 @@ public final class ServerMetrics {
 
     public static long getBackendTimeouts() {
         return BACKEND_TIMEOUTS.sum();
+    }
+
+    /**
+     * @return the number of requests delayed by pacing, counting each request in a batch
+     */
+    public static long getRequestsPaced() {
+        return REQUESTS_PACED.sum();
     }
 
     /**

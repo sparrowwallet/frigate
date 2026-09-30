@@ -18,8 +18,8 @@ import java.util.function.Supplier;
  * server events, as the number of reconnects after a backend restart, or of sessions without a connection during an outage, is the
  * exact number of sessions.</li>
  * <li>a usage line, hourly, of figures about the server's users, rounded to the nearest ten with counts below ten suppressed, as for
- * the aggregate scan stats: sessions, IPs and subscriptions connected at that moment, and notifications delivered and the largest
- * notification backlog (which reflects one client's activity) over the hour</li>
+ * the aggregate scan stats: sessions, IPs and subscriptions connected at that moment, and over the hour the notifications delivered,
+ * the largest notification backlog (which reflects one client's activity) and the requests delayed by pacing</li>
  * </ul>
  */
 public class ServerStatsLog {
@@ -99,6 +99,7 @@ public class ServerStatsLog {
         StringBuilder lastHour = new StringBuilder();
         append(lastHour, "notifications", current.notificationsDelivered() - previous.notificationsDelivered());
         append(lastHour, "notification queue high-water", queueHighWater);
+        append(lastHour, "requests delayed by pacing", current.requestsPaced() - previous.requestsPaced());
 
         if(now.isEmpty() && lastHour.isEmpty()) {
             return Optional.empty();

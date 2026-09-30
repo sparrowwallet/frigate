@@ -35,24 +35,27 @@ public final class TokenBucket {
     /**
      * Takes cost tokens, waiting until they are available. A cost above the capacity waits for a full bucket, then takes the whole
      * cost, leaving the bucket in debt. Waits happen outside the monitor, so they never block other users of this bucket.
+     * @return true if the caller had to wait
      */
-    public void acquire(long cost) throws InterruptedException {
+    public boolean acquire(long cost) throws InterruptedException {
         if(cost <= 0) {
-            return;
+            return false;
         }
 
         long required = Math.min(cost, capacity);
+        boolean waited = false;
         while(true) {
             long sleepMillis;
             synchronized(this) {
                 refill();
                 if(tokens >= required) {
                     tokens -= cost;
-                    return;
+                    return waited;
                 }
                 sleepMillis = Math.max(1, (long)Math.ceil((required - tokens) / refillPerSecond * 1000));
             }
             sleeper.sleep(sleepMillis);
+            waited = true;
         }
     }
 

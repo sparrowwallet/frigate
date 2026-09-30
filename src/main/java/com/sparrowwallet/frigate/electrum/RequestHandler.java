@@ -204,7 +204,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         }
 
         //pace requests: a burst beyond the bucket's capacity is delayed, not rejected
-        requestBucket.acquire(summary.cost(SILENT_PAYMENTS_SUBSCRIBE_COST));
+        if(requestBucket.acquire(summary.cost(SILENT_PAYMENTS_SUBSCRIBE_COST))) {
+            ServerMetrics.requestsPaced(Math.max(summary.items(), 1));
+        }
 
         try {
             String response = rpcServer.handle(request, electrumServerService);
