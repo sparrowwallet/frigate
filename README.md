@@ -363,7 +363,7 @@ The default appender does not rotate; in production, configure `logrotate` or ru
 
 Frigate logs two stats lines, kept apart so that what is logged frequently cannot expose individual clients:
 
-- Every 5 minutes, a `Server health` line reports whether the backend is connected for all, some or no sessions, whether any backend reconnects or request timeouts occurred, and the index height against the chain tip and the mempool size. It contains no counts of sessions or subscriptions. Set `healthStatsEnabled = false` under `[server]` to disable it.
+- Every 5 minutes, a `Server health` line reports whether the backend is connected for all, some or no sessions, any backend reconnects or request timeouts since the previous line, the index height (or whether it is at the chain tip) and the mempool size. It contains no counts of sessions or subscriptions. Set `healthStatsEnabled = false` under `[server]` to disable it.
 - Every hour, when `metricsEnabled` is true under `[scan]`, an `Aggregate server stats` line reports the sessions, IP addresses and subscriptions connected at that moment, and over the hour the notifications delivered, the largest notification backlog, and the silent payments subscribes delayed by [pacing](#limits). As with the scan stats, each figure is rounded to the nearest ten and omitted below ten.
 
 For health checks from monitoring tools, set `adminPort` under `[server]` to enable a JSON-RPC admin endpoint, which is always bound to the loopback address.

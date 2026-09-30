@@ -277,7 +277,7 @@ public class ElectrumServerRunnable implements Runnable {
             return;
         }
 
-        ServerStatsLog statsLog = new ServerStatsLog(this::getStats, ServerMetrics::takeNotifierQueueHighWater, System::nanoTime);
+        ServerStatsLog statsLog = new ServerStatsLog(this::getStats, ServerMetrics::takeNotifierQueueHighWater);
         statsExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "ElectrumServerStats");
             thread.setDaemon(true);

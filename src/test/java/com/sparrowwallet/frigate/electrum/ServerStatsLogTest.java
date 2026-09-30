@@ -6,8 +6,6 @@ import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -18,21 +16,21 @@ public class ServerStatsLogTest {
 
     @Test
     public void formatsHealthLine() {
-        assertEquals(Optional.of("Server health: backend connected, no reconnects or request timeouts in 300s; index 914,999 of tip 915,000, mempool 45,678 txs"),
-                ServerStatsLog.formatHealth(stats(12, 12, 0, 4, 2), stats(12, 12, 0, 4, 2), 300));
+        assertEquals(Optional.of("Server health: backend connected; index 914,999 of tip 915,000, mempool 45,678 txs"),
+                ServerStatsLog.formatHealth(stats(12, 12, 0, 4, 2), stats(12, 12, 0, 4, 2)));
     }
 
     @Test
     public void healthLineReportsBackendStateWithoutCounts() {
         //a backend restart: every session reconnects and some requests time out, which as counts would give the session count
-        String restarted = ServerStatsLog.formatHealth(stats(12, 12, 0, 16, 5), stats(12, 12, 0, 4, 2), 300).orElseThrow();
-        assertTrue(restarted.startsWith("Server health: backend connected, reconnects and request timeouts in 300s;"), restarted);
+        String restarted = ServerStatsLog.formatHealth(stats(12, 12, 0, 16, 5), stats(12, 12, 0, 4, 2)).orElseThrow();
+        assertTrue(restarted.startsWith("Server health: backend connected, reconnects and request timeouts;"), restarted);
 
-        String partly = ServerStatsLog.formatHealth(stats(12, 5, 0, 4, 3), stats(12, 12, 0, 4, 2), 300).orElseThrow();
-        assertTrue(partly.startsWith("Server health: backend partly disconnected, request timeouts in 300s;"), partly);
+        String partly = ServerStatsLog.formatHealth(stats(12, 5, 0, 4, 3), stats(12, 12, 0, 4, 2)).orElseThrow();
+        assertTrue(partly.startsWith("Server health: backend partly disconnected, request timeouts;"), partly);
 
-        String down = ServerStatsLog.formatHealth(stats(12, 0, 0, 5, 2), stats(12, 12, 0, 4, 2), 300).orElseThrow();
-        assertTrue(down.startsWith("Server health: backend disconnected, reconnects in 300s;"), down);
+        String down = ServerStatsLog.formatHealth(stats(12, 0, 0, 5, 2), stats(12, 12, 0, 4, 2)).orElseThrow();
+        assertTrue(down.startsWith("Server health: backend disconnected, reconnects;"), down);
 
         //no figure about the server's users appears in any health line
         for(String line : List.of(restarted, partly, down)) {
@@ -43,10 +41,10 @@ public class ServerStatsLogTest {
     @Test
     public void healthLineOmitsAbsentParts() {
         ServerStats noBackend = new ServerStats(3, 2, 5, 0, 2, 9, false, 0, 0, 0, 0, 915_000, 915_000, 1, 0);
-        assertEquals(Optional.of("Server health: index 915,000 of tip 915,000, mempool 1 tx"), ServerStatsLog.formatHealth(noBackend, noBackend, 300));
+        assertEquals(Optional.of("Server health: index at tip 915,000, mempool 1 tx"), ServerStatsLog.formatHealth(noBackend, noBackend));
 
         ServerStats nothing = new ServerStats(3, 2, 5, 0, 2, 9, false, 0, 0, 0, 0, null, null, null, 0);
-        assertEquals(Optional.empty(), ServerStatsLog.formatHealth(nothing, nothing, 300));
+        assertEquals(Optional.empty(), ServerStatsLog.formatHealth(nothing, nothing));
     }
 
     @Test
@@ -90,19 +88,16 @@ public class ServerStatsLogTest {
     public void linesReportChangeSinceTheirOwnPreviousLine() {
         Deque<ServerStats> snapshots = new ArrayDeque<>(List.of(stats(20, 20, 100, 1, 0), stats(20, 20, 150, 1, 0), stats(20, 20, 400, 3, 1), stats(20, 20, 600, 3, 1)));
         Deque<Long> highWaters = new ArrayDeque<>(List.of(99L, 25L));
-        AtomicLong nanos = new AtomicLong();
 
-        ServerStatsLog statsLog = new ServerStatsLog(snapshots::poll, highWaters::poll, nanos::get);
+        ServerStatsLog statsLog = new ServerStatsLog(snapshots::poll, highWaters::poll);
         //the high-water from before the log started is discarded
         assertEquals(1, highWaters.size());
 
-        nanos.addAndGet(TimeUnit.SECONDS.toNanos(300));
         String firstHealth = statsLog.nextHealthLine().orElseThrow();
-        assertTrue(firstHealth.contains("no reconnects or request timeouts in 300s"), firstHealth);
+        assertTrue(firstHealth.startsWith("Server health: backend connected;"), firstHealth);
 
-        nanos.addAndGet(TimeUnit.SECONDS.toNanos(301));
         String secondHealth = statsLog.nextHealthLine().orElseThrow();
-        assertTrue(secondHealth.contains("reconnects and request timeouts in 301s"), secondHealth);
+        assertTrue(secondHealth.startsWith("Server health: backend connected, reconnects and request timeouts;"), secondHealth);
 
         //the usage line's notifications are counted since the previous usage line, independently of the health lines
         assertEquals(Optional.of("Aggregate server stats: now [sessions:20, IPs:90, scripthash subscriptions:3400, silent payments subscriptions:30] "

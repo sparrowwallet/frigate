@@ -5,8 +5,8 @@ import com.sparrowwallet.frigate.io.AggregateCounts;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
-import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 
@@ -25,22 +25,18 @@ import java.util.function.Supplier;
 public class ServerStatsLog {
     private final Supplier<ServerStats> statsSupplier;
     private final LongSupplier queueHighWaterSupplier;
-    private final LongSupplier clock;
     private ServerStats previousHealth;
-    private long previousHealthNanos;
     private ServerStats previousUsage;
 
     /**
      * @param queueHighWaterSupplier the largest notification backlog since the previous call, resetting it
      */
-    public ServerStatsLog(Supplier<ServerStats> statsSupplier, LongSupplier queueHighWaterSupplier, LongSupplier clock) {
+    public ServerStatsLog(Supplier<ServerStats> statsSupplier, LongSupplier queueHighWaterSupplier) {
         this.statsSupplier = statsSupplier;
         this.queueHighWaterSupplier = queueHighWaterSupplier;
-        this.clock = clock;
         ServerStats initial = statsSupplier.get();
         this.previousHealth = initial;
         this.previousUsage = initial;
-        this.previousHealthNanos = clock.getAsLong();
         queueHighWaterSupplier.getAsLong();
     }
 
@@ -49,10 +45,8 @@ public class ServerStatsLog {
      */
     public synchronized Optional<String> nextHealthLine() {
         ServerStats current = statsSupplier.get();
-        long now = clock.getAsLong();
-        Optional<String> line = formatHealth(current, previousHealth, TimeUnit.NANOSECONDS.toSeconds(now - previousHealthNanos));
+        Optional<String> line = formatHealth(current, previousHealth);
         previousHealth = current;
-        previousHealthNanos = now;
         return line;
     }
 
@@ -66,17 +60,22 @@ public class ServerStatsLog {
         return line;
     }
 
-    static Optional<String> formatHealth(ServerStats current, ServerStats previous, long intervalSeconds) {
+    /**
+     * Formats the health line, mentioning reconnects, request timeouts and an index behind the tip only when they occur.
+     */
+    static Optional<String> formatHealth(ServerStats current, ServerStats previous) {
         List<String> parts = new ArrayList<>();
         if(current.backendConfigured()) {
             String state = current.backendState();
             boolean reconnects = current.backendReconnects() > previous.backendReconnects();
             boolean timeouts = current.backendTimeouts() > previous.backendTimeouts();
-            String events = reconnects && timeouts ? "reconnects and request timeouts" : reconnects ? "reconnects" : timeouts ? "request timeouts" : "no reconnects or request timeouts";
-            parts.add("backend " + state + ", " + events + " in " + intervalSeconds + "s");
+            String events = reconnects && timeouts ? ", reconnects and request timeouts" : reconnects ? ", reconnects" : timeouts ? ", request timeouts" : "";
+            parts.add("backend " + state + events);
         }
         if(current.tipHeight() != null) {
-            parts.add("index " + number(current.indexHeight()) + " of tip " + number(current.tipHeight()) + ", mempool " + number(current.mempoolSize())
+            String index = Objects.equals(current.indexHeight(), current.tipHeight()) ? "index at tip " + number(current.tipHeight())
+                    : "index " + number(current.indexHeight()) + " of tip " + number(current.tipHeight());
+            parts.add(index + ", mempool " + number(current.mempoolSize())
                     + (current.mempoolSize() == 1 ? " tx" : " txs"));
         }
         if(parts.isEmpty()) {

@@ -510,7 +510,7 @@ public class ElectrumSessionIntegrationTest {
     @Test
     public void statsLinesAreLoggedWhenEnabled() throws Exception {
         List<String> lines = statsLinesLogged(true, true);
-        assertTrue(lines.stream().anyMatch(line -> line.startsWith("Server health: backend connected, no reconnects or request timeouts in ")), lines.toString());
+        assertTrue(lines.stream().anyMatch(line -> line.equals("Server health: backend connected")), lines.toString());
         //fewer than ten of everything, so the usage line is suppressed
         assertTrue(lines.stream().noneMatch(line -> line.startsWith("Aggregate server stats")), lines.toString());
 
