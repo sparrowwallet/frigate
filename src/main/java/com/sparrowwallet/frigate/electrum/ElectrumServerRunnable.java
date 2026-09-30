@@ -68,7 +68,8 @@ public class ElectrumServerRunnable implements Runnable {
         //built once, so a bad pinned certificate fails at startup and an unverified ssl:// backend is warned about once
         this.backendTls = BackendTls.fromConfig(Config.get().getServer());
         Config.LimitsConfig limits = Config.get().getLimits();
-        this.connectionGate = new ConnectionGate(limits.getMaxConnections(), limits.getMaxConnectionsPerIp(), limits.getMaxSubscriptions(), limits.getMaxSubscriptionsPerIp());
+        this.connectionGate = new ConnectionGate(limits.getMaxConnections(), limits.getMaxConnectionsPerIp(), limits.getMaxSubscriptions(), limits.getMaxSubscriptionsPerIp(),
+                limits.getExcludedSubnetList());
 
         if(tcpBind == null && sslBind == null) {
             throw new ConfigurationException("At least one of tcp or ssl must be enabled under [server] in config.toml");

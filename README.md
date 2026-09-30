@@ -86,17 +86,17 @@ connect = true
 
 [limits]
 # maxConnections = 1000                # global concurrent session cap
-# maxConnectionsPerIp = 12             # per client IP (IPv6: per /64); loopback exempt
+# maxConnectionsPerIp = 12             # per client IP (IPv6: per /64)
 # maxRequestBytes = 1000000            # max JSON-RPC line length; oversized requests disconnect
-# maxBatchSize = 100                   # max requests per JSON-RPC batch array
+# maxBatchSize = 345                   # max requests per JSON-RPC batch array
 # sessionTimeoutSeconds = 600          # idle disconnect; Electrum clients ping every ~60s
-# maxSubscriptionsPerSession = 25000   # scripthash subscriptions per connection
 # maxSubscriptionsPerIp = 75000        # scripthash subscriptions per client IP
-# maxSubscriptions = 1000000           # global scripthash subscription cap
+# maxSubscriptions = 10000000          # global scripthash subscription cap
 # notificationQueueSize = 1000         # notifications (headers, silent payments) a client may fall behind before it is disconnected;
 #                                      # raise for clients on slow links receiving very large silent payments scans
-# requestTokens = 1000                 # token-bucket burst per session (batch items count individually)
-# requestTokensPerSecond = 100         # token refill rate; requests delay, never error
+# silentPaymentsSubscribeBurst = 10              # silent payments subscribes a session may make at once
+# silentPaymentsSubscribeIntervalSeconds = 10    # then one per interval; subscribes beyond the burst are delayed, never rejected
+# excludedSubnets = ["127.0.0.1/32", "::1/128"]   # clients exempt from per-IP limits, the batch cap and pacing; add your LAN for a home server
 ```
 
 ### Core
@@ -195,13 +195,15 @@ The settings under `[limits]` protect Frigate when it is open to the public, and
 
 - **Connections**: at most `maxConnections` sessions in total, and `maxConnectionsPerIp` per client IP address (per /64 prefix for IPv6). A connection over either limit is closed without a response.
 - **Requests**: a request longer than `maxRequestBytes` is answered with a `-32600 request too large` error and the connection is closed. A batch of more than `maxBatchSize` requests is rejected whole with a `-32600 batch too large` error, and the session continues. A request containing control characters is answered with a `-32700` parse error.
-- **Pacing**: each session draws its requests from a token bucket holding `requestTokens`, refilled at `requestTokensPerSecond`, with each request in a batch counting separately and a `blockchain.silentpayments.subscribe` costing 25. Requests beyond the bucket are delayed rather than rejected, so a large wallet's initial sync is slowed rather than refused.
-- **Subscriptions**: scripthash subscriptions are limited per session (`maxSubscriptionsPerSession`), per IP (`maxSubscriptionsPerIp`) and in total (`maxSubscriptions`). A subscription over any limit is refused with a `-32005 subscription limit exceeded` error; subscribing again to a scripthash the session already has is not counted.
+- **Pacing**: each `blockchain.silentpayments.subscribe` starts a scan of the index, so a session may make `silentPaymentsSubscribeBurst` subscribes at once, and then one every `silentPaymentsSubscribeIntervalSeconds`. With the defaults, that is 10 at once and then one every 10 seconds. Subscribes beyond this are delayed rather than rejected. Other requests are not paced.
+- **Subscriptions**: scripthash subscriptions are limited per IP (`maxSubscriptionsPerIp`) and in total (`maxSubscriptions`). A subscription over either limit is refused with a `-32005 subscription limit exceeded` error; subscribing again to a scripthash the session already has is not counted.
 - **Idle sessions**: a session from which nothing is received for `sessionTimeoutSeconds` is closed. Electrum clients ping about every minute, so only dead or abandoned sessions are affected.
 - **Slow clients**: a client that falls `notificationQueueSize` notifications behind is disconnected. Scripthash status notifications are coalesced, so this is reached through header and silent payments notifications; raise it for clients on slow links receiving very large silent payments scans.
 
-Connections from the loopback address are exempt from the per-IP limits, though not from the overall ones, so local tools such as the Frigate CLI are not limited.
-Behind a reverse proxy on the same host, every client arrives from the loopback address, so only the overall limits apply.
+Clients connecting from the subnets in `excludedSubnets` are exempt from the per-IP limits, the batch cap and pacing, though not from the overall limits (`maxConnections` and `maxSubscriptions`) or the protections above against oversized requests and slow clients.
+The default is the loopback address, so local tools such as the Frigate CLI are not limited, and clients of a server offered over Tor, which all arrive from the loopback address, are treated in the same way.
+For a home server, add your local network, for example `excludedSubnets = ["127.0.0.1/32", "::1/128", "192.168.0.0/16"]`.
+Set `excludedSubnets = []` to apply every limit to all clients, including those behind a reverse proxy on the same host, which also arrive from the loopback address.
 
 ## Usage
 
@@ -331,7 +333,7 @@ WantedBy=multi-user.target
 For public deployments, supply a real certificate via `sslCert` and `sslKey` rather than the self-signed example in [Configuration > Server](#server).
 The `host` field under `[server]` is advertised in `server.features` and should match the hostname clients use when validating the certificate.
 TLS termination at a reverse proxy is also supported – in that case, run Frigate with `tcp = "tcp://127.0.0.1:50001"` and terminate TLS upstream.
-Note that clients then all appear to come from the loopback address, which is exempt from the per-IP [limits](#limits).
+Note that clients then all appear to come from the loopback address, which is in the default `excludedSubnets` (see [Limits](#limits)).
 
 Frigate checks the certificate and key files every `sslReloadSeconds` (default 300) and reloads them when they change, so a renewed certificate (from certbot, for example) is served without a restart.
 New connections use the new certificate, while existing ones are unaffected.
@@ -362,7 +364,7 @@ The default appender does not rotate; in production, configure `logrotate` or ru
 Frigate logs two stats lines, kept apart so that what is logged frequently cannot expose individual clients:
 
 - Every 5 minutes, a `Server health` line reports whether the backend is connected for all, some or no sessions, whether any backend reconnects or request timeouts occurred, and the index height against the chain tip and the mempool size. It contains no counts of sessions or subscriptions. Set `healthStatsEnabled = false` under `[server]` to disable it.
-- Every hour, when `metricsEnabled` is true under `[scan]`, an `Aggregate server stats` line reports the sessions, IP addresses and subscriptions connected at that moment, and over the hour the notifications delivered, the largest notification backlog, and the requests delayed by [pacing](#limits). As with the scan stats, each figure is rounded to the nearest ten and omitted below ten.
+- Every hour, when `metricsEnabled` is true under `[scan]`, an `Aggregate server stats` line reports the sessions, IP addresses and subscriptions connected at that moment, and over the hour the notifications delivered, the largest notification backlog, and the silent payments subscribes delayed by [pacing](#limits). As with the scan stats, each figure is rounded to the nearest ten and omitted below ten.
 
 For health checks from monitoring tools, set `adminPort` under `[server]` to enable a JSON-RPC admin endpoint, which is always bound to the loopback address.
 Its single `getinfo` method returns the version, network, uptime, effective limits and the same health figures, with usage figures rounded as in the hourly line.

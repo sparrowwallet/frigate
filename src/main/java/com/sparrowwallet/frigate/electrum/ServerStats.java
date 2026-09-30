@@ -9,13 +9,13 @@ import java.util.Collection;
  * reconnects, timeouts) are cumulative for the life of the process; the log lines report their change.
  *
  * @param backendConfigured whether a backend Electrum server is configured
- * @param requestsPaced the number of requests delayed by request pacing
+ * @param silentPaymentsSubscribesPaced the number of silent payments subscribes delayed by pacing
  * @param tipHeight the chain tip height, or null without a Bitcoin Core connection, as are indexHeight and mempoolSize
  */
 public record ServerStats(int sessions, int distinctIps, long scriptHashSubscriptions, int silentPaymentsSubscriptions,
                           int notifierQueueDepth, long notificationsDelivered,
                           boolean backendConfigured, int backendSessions, int backendConnected, long backendReconnects, long backendTimeouts,
-                          Integer tipHeight, Integer indexHeight, Integer mempoolSize, long requestsPaced) {
+                          Integer tipHeight, Integer indexHeight, Integer mempoolSize, long silentPaymentsSubscribesPaced) {
 
     /**
      * @return the backend's state across sessions without counts: connected (for every session), partly disconnected or
@@ -58,6 +58,6 @@ public record ServerStats(int sessions, int distinctIps, long scriptHashSubscrip
         return new ServerStats(count, connectionGate.getDistinctIpCount(), connectionGate.getSubscriptionCount(), silentPaymentsSubscriptions,
                 notifierQueueDepth, ServerMetrics.getNotificationsDelivered(),
                 backendConfigured, backendSessions, backendConnected, ServerMetrics.getBackendReconnects(), ServerMetrics.getBackendTimeouts(),
-                tipHeight, indexHeight, mempoolSize, ServerMetrics.getRequestsPaced());
+                tipHeight, indexHeight, mempoolSize, ServerMetrics.getSilentPaymentsSubscribesPaced());
     }
 }

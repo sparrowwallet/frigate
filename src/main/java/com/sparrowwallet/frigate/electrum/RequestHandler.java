@@ -47,8 +47,6 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     //client that keeps its connection open can hold the session, and the budget the data read from one that keeps sending
     private static final long OVERSIZED_REQUEST_DRAIN_NANOS = TimeUnit.SECONDS.toNanos(2);
     private static final long OVERSIZED_REQUEST_DRAIN_BYTES = 16 * 1024 * 1024;
-    //each silent payments subscribe starts a scan of the index, so it costs as many tokens as this many ordinary requests
-    private static final int SILENT_PAYMENTS_SUBSCRIBE_COST = 25;
     private static final String BATCH_TOO_LARGE = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"batch too large\"},\"id\":null}";
     private static final String PARSE_ERROR = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":\"Parse error\"},\"id\":null}";
     private final Socket clientSocket;
@@ -58,8 +56,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private final BackendSession backendSession;
     private final ConnectionGate connectionGate;
     private final ConnectionGate.IpKey ipKey;
-    private final int maxSubscriptionsPerSession;
-    private final TokenBucket requestBucket;
+    private final TokenBucket silentPaymentsSubscribeBucket;
     private final Object shutdownLock = new Object();
     private boolean shuttingDown;
     private boolean handlingRequest;
@@ -90,8 +87,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         this.connectionGate = connectionGate;
         this.ipKey = ipKey;
         Config.LimitsConfig limits = Config.get().getLimits();
-        this.maxSubscriptionsPerSession = limits.getMaxSubscriptionsPerSession();
-        this.requestBucket = new TokenBucket(limits.getRequestTokens(), limits.getRequestTokensPerSecond());
+        this.silentPaymentsSubscribeBucket = new TokenBucket(limits.getSilentPaymentsSubscribeBurst(), 1.0 / limits.getSilentPaymentsSubscribeIntervalSeconds());
         this.headersDispatcher = bitcoindClient != null ? bitcoindClient.getHeadersDispatcher() : null;
         Config.ServerConfig serverConfig = Config.get().getServer();
         Server backendServer = serverConfig.getBackendElectrumServerObj();
@@ -186,6 +182,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
 
     /**
      * Handles one request line: rejects it if it is malformed or an oversized batch, and otherwise paces it and writes its response.
+     * Clients from an excluded subnet are exempt from the batch cap and pacing.
      */
     private void handleRequest(String request, int maxBatchSize) throws InterruptedException {
         //reject requests with null bytes or other control characters
@@ -195,17 +192,20 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             return;
         }
 
-        //reject an oversized batch without processing any of it; the session continues, as the stream is intact
-        JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, maxBatchSize);
-        if(summary.items() > maxBatchSize) {
-            log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
-            writeLine(BATCH_TOO_LARGE);
-            return;
-        }
+        if(!ipKey.exempt()) {
+            //reject an oversized batch without processing any of it; the session continues, as the stream is intact
+            JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, maxBatchSize);
+            if(summary.items() > maxBatchSize) {
+                log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
+                writeLine(BATCH_TOO_LARGE);
+                return;
+            }
 
-        //pace requests: a burst beyond the bucket's capacity is delayed, not rejected
-        if(requestBucket.acquire(summary.cost(SILENT_PAYMENTS_SUBSCRIBE_COST))) {
-            ServerMetrics.requestsPaced(Math.max(summary.items(), 1));
+            //pace silent payments subscribes, each of which starts a scan of the index: a burst beyond the bucket is delayed, not rejected
+            int silentPaymentsSubscribes = summary.silentPaymentsSubscribes();
+            if(silentPaymentsSubscribes > 0 && silentPaymentsSubscribeBucket.acquire(silentPaymentsSubscribes)) {
+                ServerMetrics.silentPaymentsSubscribesPaced(silentPaymentsSubscribes);
+            }
         }
 
         try {
@@ -407,18 +407,15 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
      * Called before the backend subscribe request is sent. Statuses for the scripthash are held back from the client until the
      * response has been written, see AsyncNotifier.
      *
-     * A new subscription is counted against the per-session cap, and reserved against the per-IP and global caps in the connection
-     * gate; a subscription the client already has is not counted again. Subscriptions are only added and removed on the request
-     * thread, so the reservations held always equal the session's subscription count.
+     * A new subscription is reserved against the per-IP and global caps in the connection gate; a subscription the client already
+     * has is not counted again. Subscriptions are only added and removed on the request thread, so the reservations held always
+     * equal the session's subscription count.
      * @return true if the subscription was added, false if the client was already subscribed
      * @throws SubscriptionLimitException if a new subscription would exceed a limit
      */
     public boolean subscribeScriptHash(String scriptHash) throws SubscriptionLimitException {
         boolean reserved = false;
         if(!scriptHashSubscriptions.isSubscribed(scriptHash)) {
-            if(scriptHashSubscriptions.size() >= maxSubscriptionsPerSession) {
-                throw new SubscriptionLimitException("limit of " + maxSubscriptionsPerSession + " subscriptions per connection reached");
-            }
             if(!connectionGate.tryReserveSubscription(ipKey)) {
                 throw new SubscriptionLimitException("server subscription limit reached");
             }

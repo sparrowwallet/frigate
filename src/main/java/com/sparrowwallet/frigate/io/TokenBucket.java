@@ -4,8 +4,8 @@ import java.util.function.LongSupplier;
 
 /**
  * Paces requests: each takes tokens from a bucket that refills at a steady rate up to its capacity, and waits when too few
- * remain. Waiting rather than failing gives clients backpressure, so a wallet's burst of initial sync requests is slowed rather
- * than rejected. The bucket starts full.
+ * remain. Waiting rather than failing gives clients backpressure, so a burst of requests is slowed rather than rejected. The
+ * bucket starts full.
  *
  * A request costing more than the capacity waits for a full bucket and then takes its whole cost, leaving the bucket in debt.
  * Later requests wait while the debt is repaid, so the long-run rate matches what requests actually cost, rather than capping
@@ -19,11 +19,11 @@ public final class TokenBucket {
     private double tokens;
     private long lastRefillNanos;
 
-    public TokenBucket(long capacity, long refillPerSecond) {
+    public TokenBucket(long capacity, double refillPerSecond) {
         this(capacity, refillPerSecond, System::nanoTime, Thread::sleep);
     }
 
-    TokenBucket(long capacity, long refillPerSecond, LongSupplier clock, Sleeper sleeper) {
+    TokenBucket(long capacity, double refillPerSecond, LongSupplier clock, Sleeper sleeper) {
         this.capacity = capacity;
         this.refillPerSecond = refillPerSecond;
         this.clock = clock;

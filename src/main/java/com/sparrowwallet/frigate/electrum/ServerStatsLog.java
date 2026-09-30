@@ -19,7 +19,7 @@ import java.util.function.Supplier;
  * exact number of sessions.</li>
  * <li>a usage line, hourly, of figures about the server's users, rounded to the nearest ten with counts below ten suppressed, as for
  * the aggregate scan stats: sessions, IPs and subscriptions connected at that moment, and over the hour the notifications delivered,
- * the largest notification backlog (which reflects one client's activity) and the requests delayed by pacing</li>
+ * the largest notification backlog (which reflects one client's activity) and the silent payments subscribes delayed by pacing</li>
  * </ul>
  */
 public class ServerStatsLog {
@@ -99,7 +99,7 @@ public class ServerStatsLog {
         StringBuilder lastHour = new StringBuilder();
         append(lastHour, "notifications", current.notificationsDelivered() - previous.notificationsDelivered());
         append(lastHour, "notification queue high-water", queueHighWater);
-        append(lastHour, "requests delayed by pacing", current.requestsPaced() - previous.requestsPaced());
+        append(lastHour, "silent payments subscribes delayed by pacing", current.silentPaymentsSubscribesPaced() - previous.silentPaymentsSubscribesPaced());
 
         if(now.isEmpty() && lastHour.isEmpty()) {
             return Optional.empty();

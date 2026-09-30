@@ -11,7 +11,7 @@ public final class ServerMetrics {
     private static final LongAdder NOTIFICATIONS_DELIVERED = new LongAdder();
     private static final LongAdder BACKEND_RECONNECTS = new LongAdder();
     private static final LongAdder BACKEND_TIMEOUTS = new LongAdder();
-    private static final LongAdder REQUESTS_PACED = new LongAdder();
+    private static final LongAdder SILENT_PAYMENTS_SUBSCRIBES_PACED = new LongAdder();
     private static final LongAccumulator NOTIFIER_QUEUE_HIGH_WATER = new LongAccumulator(Math::max, 0);
 
     private ServerMetrics() {
@@ -29,8 +29,8 @@ public final class ServerMetrics {
         BACKEND_TIMEOUTS.increment();
     }
 
-    static void requestsPaced(long requests) {
-        REQUESTS_PACED.add(requests);
+    static void silentPaymentsSubscribesPaced(long subscribes) {
+        SILENT_PAYMENTS_SUBSCRIBES_PACED.add(subscribes);
     }
 
     static void notifierQueueDepth(int depth) {
@@ -50,10 +50,10 @@ public final class ServerMetrics {
     }
 
     /**
-     * @return the number of requests delayed by pacing, counting each request in a batch
+     * @return the number of silent payments subscribes delayed by pacing
      */
-    public static long getRequestsPaced() {
-        return REQUESTS_PACED.sum();
+    public static long getSilentPaymentsSubscribesPaced() {
+        return SILENT_PAYMENTS_SUBSCRIBES_PACED.sum();
     }
 
     /**

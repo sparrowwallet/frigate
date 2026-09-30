@@ -5,6 +5,7 @@ import com.fasterxml.jackson.dataformat.toml.TomlMapper;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -21,12 +22,11 @@ public class LimitsConfigTest {
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_REQUEST_BYTES, limits.getMaxRequestBytes());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_BATCH_SIZE, limits.getMaxBatchSize());
         assertEquals(Config.LimitsConfig.DEFAULT_SESSION_TIMEOUT_SECONDS, limits.getSessionTimeoutSeconds());
-        assertEquals(Config.LimitsConfig.DEFAULT_MAX_SUBSCRIPTIONS_PER_SESSION, limits.getMaxSubscriptionsPerSession());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_SUBSCRIPTIONS_PER_IP, limits.getMaxSubscriptionsPerIp());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_SUBSCRIPTIONS, limits.getMaxSubscriptions());
         assertEquals(Config.LimitsConfig.DEFAULT_NOTIFICATION_QUEUE_SIZE, limits.getNotificationQueueSize());
-        assertEquals(Config.LimitsConfig.DEFAULT_REQUEST_TOKENS, limits.getRequestTokens());
-        assertEquals(Config.LimitsConfig.DEFAULT_REQUEST_TOKENS_PER_SECOND, limits.getRequestTokensPerSecond());
+        assertEquals(Config.LimitsConfig.DEFAULT_SILENT_PAYMENTS_SUBSCRIBE_BURST, limits.getSilentPaymentsSubscribeBurst());
+        assertEquals(Config.LimitsConfig.DEFAULT_SILENT_PAYMENTS_SUBSCRIBE_INTERVAL_SECONDS, limits.getSilentPaymentsSubscribeIntervalSeconds());
     }
 
     @Test
@@ -44,12 +44,11 @@ public class LimitsConfigTest {
                 maxRequestBytes = 2000
                 maxBatchSize = 10
                 sessionTimeoutSeconds = 30
-                maxSubscriptionsPerSession = 500
                 maxSubscriptionsPerIp = 1500
                 maxSubscriptions = 5000000000
                 notificationQueueSize = 20
-                requestTokens = 40
-                requestTokensPerSecond = 4
+                silentPaymentsSubscribeBurst = 40
+                silentPaymentsSubscribeIntervalSeconds = 4
                 """);
 
         assertEquals(50, limits.getMaxConnections());
@@ -57,12 +56,11 @@ public class LimitsConfigTest {
         assertEquals(2000, limits.getMaxRequestBytes());
         assertEquals(10, limits.getMaxBatchSize());
         assertEquals(30, limits.getSessionTimeoutSeconds());
-        assertEquals(500, limits.getMaxSubscriptionsPerSession());
         assertEquals(1500, limits.getMaxSubscriptionsPerIp());
         assertEquals(5_000_000_000L, limits.getMaxSubscriptions());
         assertEquals(20, limits.getNotificationQueueSize());
-        assertEquals(40, limits.getRequestTokens());
-        assertEquals(4, limits.getRequestTokensPerSecond());
+        assertEquals(40, limits.getSilentPaymentsSubscribeBurst());
+        assertEquals(4, limits.getSilentPaymentsSubscribeIntervalSeconds());
     }
 
     @Test
@@ -74,12 +72,11 @@ public class LimitsConfigTest {
                 maxRequestBytes = 0
                 maxBatchSize = 0
                 sessionTimeoutSeconds = -5
-                maxSubscriptionsPerSession = 0
                 maxSubscriptionsPerIp = 0
                 maxSubscriptions = 0
                 notificationQueueSize = 0
-                requestTokens = 0
-                requestTokensPerSecond = -1
+                silentPaymentsSubscribeBurst = 0
+                silentPaymentsSubscribeIntervalSeconds = -1
                 """);
 
         assertDefaults(limits);
@@ -114,6 +111,27 @@ public class LimitsConfigTest {
         Config.ServerConfig set = MAPPER.readValue("[server]\ndonationAddress = \" bc1qexample \"\nbannerFile = \"/etc/frigate/banner.txt\"\n", Config.class).getServer();
         assertEquals("bc1qexample", set.getDonationAddress());
         assertEquals(new java.io.File("/etc/frigate/banner.txt"), set.getBannerFileObj());
+    }
+
+    @Test
+    public void excludedSubnetsAreParsed() throws Exception {
+        assertEquals(List.of("127.0.0.1/32", "::1/128"), new Config().getLimits().getExcludedSubnets());
+        assertEquals(2, new Config().getLimits().getExcludedSubnetList().size());
+
+        Config.LimitsConfig home = parse("[limits]\nexcludedSubnets = [\"127.0.0.1/32\", \"192.168.0.0/16\", \"fd00::/8\", \"10.0.0.5\"]\n");
+        List<Subnet> subnets = home.getExcludedSubnetList();
+        assertEquals(4, subnets.size());
+        assertTrue(subnets.get(1).contains(java.net.InetAddress.getByName("192.168.44.3")));
+        assertTrue(subnets.get(2).contains(java.net.InetAddress.getByName("fd12::1")));
+        assertTrue(subnets.get(3).contains(java.net.InetAddress.getByName("10.0.0.5")));
+        assertFalse(subnets.get(3).contains(java.net.InetAddress.getByName("10.0.0.6")));
+
+        //an empty list exempts no one
+        assertEquals(List.of(), parse("[limits]\nexcludedSubnets = []\n").getExcludedSubnetList());
+
+        //an invalid subnet fails when the server starts
+        assertThrows(com.sparrowwallet.frigate.ConfigurationException.class, () -> parse("[limits]\nexcludedSubnets = [\"192.168.0.0/33\"]\n").getExcludedSubnetList());
+        assertThrows(com.sparrowwallet.frigate.ConfigurationException.class, () -> parse("[limits]\nexcludedSubnets = [\"lan\"]\n").getExcludedSubnetList());
     }
 
     @Test

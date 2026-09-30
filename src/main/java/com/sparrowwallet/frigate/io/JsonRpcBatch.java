@@ -80,14 +80,5 @@ public final class JsonRpcBatch {
      * @param items the batch item count as returned by countItems: -1 if the line is not a batch
      * @param silentPaymentsSubscribes the number of silent payments subscribes among the requests
      */
-    public record Summary(int items, int silentPaymentsSubscribes) {
-        /**
-         * @return the request pacing cost: one per request, with each silent payments subscribe costing silentPaymentsSubscribeCost
-         * instead, and at least one for any line
-         */
-        public long cost(int silentPaymentsSubscribeCost) {
-            int requests = Math.max(items, 1);
-            return requests + (long)silentPaymentsSubscribes * (silentPaymentsSubscribeCost - 1);
-        }
-    }
+    public record Summary(int items, int silentPaymentsSubscribes) {}
 }

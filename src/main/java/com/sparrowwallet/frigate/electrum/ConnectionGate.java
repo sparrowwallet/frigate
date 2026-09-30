@@ -1,10 +1,13 @@
 package com.sparrowwallet.frigate.electrum;
 
+import com.sparrowwallet.frigate.io.Subnet;
+
 import java.net.Inet4Address;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -14,9 +17,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * Also accounts for scripthash subscriptions within a global cap and a per-IP cap, reserved by sessions as clients subscribe.
  *
  * Clients are grouped by IPv4 address, or by IPv6 /64 prefix, as a single IPv6 allocation is usually a /64 and a per-address
- * limit would be trivially evaded within it. IPv4-mapped IPv6 addresses are grouped as their IPv4 address. Loopback connections
- * (operator tooling, the CLI, benchmarks) are exempt from the per-IP caps, but not from the global caps. This also means that
- * behind a reverse proxy on the same host, where every client arrives from loopback, only the global caps apply.
+ * limit would be trivially evaded within it. IPv4-mapped IPv6 addresses are grouped as their IPv4 address. Clients from the
+ * excluded subnets (loopback by default) are exempt from the per-IP caps, but not from the global caps.
  */
 public class ConnectionGate {
     private final int maxConnections;
@@ -27,19 +29,32 @@ public class ConnectionGate {
     private final ConcurrentHashMap<IpKey, Integer> perIp = new ConcurrentHashMap<>();
     private final AtomicLong subscriptions = new AtomicLong();
     private final ConcurrentHashMap<IpKey, Integer> subscriptionsPerIp = new ConcurrentHashMap<>();
+    private final List<Subnet> excludedSubnets;
 
     /**
-     * A gate limiting connections only, with no subscription limits.
+     * A gate limiting connections only, with no subscription limits, and excluding only loopback.
      */
     public ConnectionGate(int maxConnections, int maxConnectionsPerIp) {
-        this(maxConnections, maxConnectionsPerIp, Long.MAX_VALUE, Integer.MAX_VALUE);
+        this(maxConnections, maxConnectionsPerIp, Long.MAX_VALUE, Integer.MAX_VALUE, List.of(Subnet.parse("127.0.0.1/32"), Subnet.parse("::1/128")));
     }
 
-    public ConnectionGate(int maxConnections, int maxConnectionsPerIp, long maxSubscriptions, int maxSubscriptionsPerIp) {
+    /**
+     * @param excludedSubnets subnets whose clients are exempt from the per-IP caps
+     */
+    public ConnectionGate(int maxConnections, int maxConnectionsPerIp, long maxSubscriptions, int maxSubscriptionsPerIp, List<Subnet> excludedSubnets) {
         this.maxConnections = maxConnections;
         this.maxConnectionsPerIp = maxConnectionsPerIp;
         this.maxSubscriptions = maxSubscriptions;
         this.maxSubscriptionsPerIp = maxSubscriptionsPerIp;
+        this.excludedSubnets = excludedSubnets;
+    }
+
+    /**
+     * @return the client's key: its IP group, and whether it is from an excluded subnet
+     */
+    public IpKey keyFor(InetAddress address) {
+        boolean exempt = excludedSubnets.stream().anyMatch(subnet -> subnet.contains(address));
+        return IpKey.of(address, exempt);
     }
 
     /**
@@ -51,13 +66,13 @@ public class ConnectionGate {
             return null;
         }
 
-        IpKey key = IpKey.of(address);
+        IpKey key = keyFor(address);
         //the check and increment happen inside one compute(): a separate check then increment would race release()'s
         //remove-on-zero, orphaning the incremented count and leaking a slot each time
         boolean[] admitted = new boolean[1];
         perIp.compute(key, (k, count) -> {
             int current = count == null ? 0 : count;
-            if(!key.loopback() && current >= maxConnectionsPerIp) {
+            if(!key.exempt() && current >= maxConnectionsPerIp) {
                 admitted[0] = false;
                 return count;
             }
@@ -90,7 +105,7 @@ public class ConnectionGate {
         boolean[] reserved = new boolean[1];
         subscriptionsPerIp.compute(key, (k, count) -> {
             int current = count == null ? 0 : count;
-            if(!key.loopback() && current >= maxSubscriptionsPerIp) {
+            if(!key.exempt() && current >= maxSubscriptionsPerIp) {
                 reserved[0] = false;
                 return count;
             }
@@ -134,22 +149,24 @@ public class ConnectionGate {
 
     /**
      * Identifies a client for per-IP limits: an IPv4 address, or an IPv6 /64 prefix.
+     *
+     * @param exempt whether the client is from an excluded subnet, and so exempt from the per-client limits
      */
-    public record IpKey(String value, boolean loopback) {
-        public static IpKey of(InetAddress address) {
+    public record IpKey(String value, boolean exempt) {
+        static IpKey of(InetAddress address, boolean exempt) {
             byte[] bytes = address.getAddress();
             if(address instanceof Inet6Address && isIpv4Mapped(bytes)) {
                 try {
-                    return of(Inet4Address.getByAddress(new byte[] {bytes[12], bytes[13], bytes[14], bytes[15]}));
+                    return of(Inet4Address.getByAddress(new byte[] {bytes[12], bytes[13], bytes[14], bytes[15]}), exempt);
                 } catch(UnknownHostException e) {
                     throw new IllegalStateException(e);
                 }
             }
             if(address instanceof Inet6Address && !address.isLoopbackAddress()) {
                 String prefix = HexFormat.of().formatHex(bytes, 0, 8);
-                return new IpKey(prefix.replaceAll("(.{4})(?!$)", "$1:") + "::/64", false);
+                return new IpKey(prefix.replaceAll("(.{4})(?!$)", "$1:") + "::/64", exempt);
             }
-            return new IpKey(address.getHostAddress(), address.isLoopbackAddress());
+            return new IpKey(address.getHostAddress(), exempt);
         }
 
         private static boolean isIpv4Mapped(byte[] bytes) {

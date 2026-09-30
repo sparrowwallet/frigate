@@ -1,5 +1,6 @@
 package com.sparrowwallet.frigate.electrum;
 
+import com.sparrowwallet.frigate.io.Subnet;
 import org.junit.jupiter.api.Test;
 
 import java.net.InetAddress;
@@ -13,6 +14,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class ConnectionGateTest {
+    private static final List<Subnet> LOOPBACK = List.of(Subnet.parse("127.0.0.1/32"), Subnet.parse("::1/128"));
+
     private static InetAddress address(String host) throws Exception {
         return InetAddress.getByName(host);
     }
@@ -98,14 +101,15 @@ public class ConnectionGateTest {
         mapped[15] = 1;
         java.net.Inet6Address mappedAddress = java.net.Inet6Address.getByAddress(null, mapped, -1);
 
-        assertEquals(ConnectionGate.IpKey.of(address("10.0.0.1")), ConnectionGate.IpKey.of(mappedAddress));
+        ConnectionGate gate = new ConnectionGate(100, 100);
+        assertEquals(gate.keyFor(address("10.0.0.1")), gate.keyFor(mappedAddress));
     }
 
     @Test
     public void globalSubscriptionCapIsEnforced() throws Exception {
-        ConnectionGate gate = new ConnectionGate(100, 100, 3, 100);
-        ConnectionGate.IpKey first = ConnectionGate.IpKey.of(address("10.0.0.1"));
-        ConnectionGate.IpKey second = ConnectionGate.IpKey.of(address("10.0.0.2"));
+        ConnectionGate gate = new ConnectionGate(100, 100, 3, 100, LOOPBACK);
+        ConnectionGate.IpKey first = gate.keyFor(address("10.0.0.1"));
+        ConnectionGate.IpKey second = gate.keyFor(address("10.0.0.2"));
 
         assertTrue(gate.tryReserveSubscription(first));
         assertTrue(gate.tryReserveSubscription(first));
@@ -119,9 +123,9 @@ public class ConnectionGateTest {
 
     @Test
     public void perIpSubscriptionCapIsEnforced() throws Exception {
-        ConnectionGate gate = new ConnectionGate(100, 100, 1000, 2);
-        ConnectionGate.IpKey first = ConnectionGate.IpKey.of(address("10.0.0.1"));
-        ConnectionGate.IpKey second = ConnectionGate.IpKey.of(address("10.0.0.2"));
+        ConnectionGate gate = new ConnectionGate(100, 100, 1000, 2, LOOPBACK);
+        ConnectionGate.IpKey first = gate.keyFor(address("10.0.0.1"));
+        ConnectionGate.IpKey second = gate.keyFor(address("10.0.0.2"));
 
         assertTrue(gate.tryReserveSubscription(first));
         assertTrue(gate.tryReserveSubscription(first));
@@ -138,8 +142,8 @@ public class ConnectionGateTest {
 
     @Test
     public void loopbackIsExemptFromPerIpSubscriptionCapButNotGlobalCap() throws Exception {
-        ConnectionGate gate = new ConnectionGate(100, 100, 4, 1);
-        ConnectionGate.IpKey loopback = ConnectionGate.IpKey.of(InetAddress.getLoopbackAddress());
+        ConnectionGate gate = new ConnectionGate(100, 100, 4, 1, LOOPBACK);
+        ConnectionGate.IpKey loopback = gate.keyFor(InetAddress.getLoopbackAddress());
 
         for(int i = 0; i < 4; i++) {
             assertTrue(gate.tryReserveSubscription(loopback));
@@ -149,8 +153,8 @@ public class ConnectionGateTest {
 
     @Test
     public void releasingNothingIsIgnored() throws Exception {
-        ConnectionGate gate = new ConnectionGate(100, 100, 10, 10);
-        ConnectionGate.IpKey key = ConnectionGate.IpKey.of(address("10.0.0.1"));
+        ConnectionGate gate = new ConnectionGate(100, 100, 10, 10, LOOPBACK);
+        ConnectionGate.IpKey key = gate.keyFor(address("10.0.0.1"));
 
         gate.releaseSubscriptions(key, 0);
 
@@ -159,12 +163,39 @@ public class ConnectionGateTest {
     }
 
     @Test
+    public void excludedSubnetsAreExemptFromPerIpCaps() throws Exception {
+        ConnectionGate gate = new ConnectionGate(100, 1, 100, 1, List.of(Subnet.parse("192.168.0.0/16")));
+
+        //a client on the excluded network is exempt from the per-IP connection and subscription caps
+        assertNotNull(gate.tryAcquire(address("192.168.1.20")));
+        assertNotNull(gate.tryAcquire(address("192.168.1.20")));
+        assertTrue(gate.tryReserveSubscription(gate.keyFor(address("192.168.1.20"))));
+        assertTrue(gate.tryReserveSubscription(gate.keyFor(address("192.168.1.20"))));
+        assertTrue(gate.keyFor(address("192.168.1.20")).exempt());
+
+        //others are not, and loopback is not exempt unless it is listed
+        for(String host : List.of("10.0.0.1", "127.0.0.1")) {
+            assertFalse(gate.keyFor(address(host)).exempt());
+            assertNotNull(gate.tryAcquire(address(host)));
+            assertNull(gate.tryAcquire(address(host)));
+        }
+    }
+
+    @Test
+    public void noExcludedSubnetsLimitsLoopback() throws Exception {
+        ConnectionGate gate = new ConnectionGate(100, 1, 100, 1, List.of());
+
+        assertNotNull(gate.tryAcquire(InetAddress.getLoopbackAddress()));
+        assertNull(gate.tryAcquire(InetAddress.getLoopbackAddress()));
+    }
+
+    @Test
     public void concurrentSubscriptionReservationsRespectCaps() throws Exception {
         int maxSubscriptions = 10;
         int maxSubscriptionsPerIp = 3;
-        ConnectionGate gate = new ConnectionGate(100, 100, maxSubscriptions, maxSubscriptionsPerIp);
-        List<ConnectionGate.IpKey> keys = List.of(ConnectionGate.IpKey.of(address("10.0.0.1")), ConnectionGate.IpKey.of(address("10.0.0.2")),
-                ConnectionGate.IpKey.of(address("10.0.0.3")), ConnectionGate.IpKey.of(address("2001:db8::1")), ConnectionGate.IpKey.of(InetAddress.getLoopbackAddress()));
+        ConnectionGate gate = new ConnectionGate(100, 100, maxSubscriptions, maxSubscriptionsPerIp, LOOPBACK);
+        List<ConnectionGate.IpKey> keys = List.of(gate.keyFor(address("10.0.0.1")), gate.keyFor(address("10.0.0.2")),
+                gate.keyFor(address("10.0.0.3")), gate.keyFor(address("2001:db8::1")), gate.keyFor(InetAddress.getLoopbackAddress()));
 
         //reservations actually held, counted by the test, as the gate's global count can briefly exceed its cap while a refusal backs out
         AtomicInteger held = new AtomicInteger();
@@ -187,7 +218,7 @@ public class ConnectionGateTest {
                         }
                         maxHeld.accumulateAndGet(held.incrementAndGet(), Math::max);
                         AtomicInteger ipHeld = heldPerIp.computeIfAbsent(key, k -> new AtomicInteger());
-                        if(ipHeld.incrementAndGet() > maxSubscriptionsPerIp && !key.loopback()) {
+                        if(ipHeld.incrementAndGet() > maxSubscriptionsPerIp && !key.exempt()) {
                             overPerIpCap.incrementAndGet();
                         }
                         Thread.yield();
@@ -246,7 +277,7 @@ public class ConnectionGateTest {
                         admitted.incrementAndGet();
                         maxHeld.accumulateAndGet(held.incrementAndGet(), Math::max);
                         AtomicInteger ipHeld = heldPerIp.computeIfAbsent(key, k -> new AtomicInteger());
-                        if(ipHeld.incrementAndGet() > maxConnectionsPerIp && !key.loopback()) {
+                        if(ipHeld.incrementAndGet() > maxConnectionsPerIp && !key.exempt()) {
                             overPerIpCap.incrementAndGet();
                         }
                         Thread.yield();

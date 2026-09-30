@@ -54,16 +54,6 @@ public class JsonRpcBatchTest {
     }
 
     @Test
-    public void summaryCost() {
-        assertEquals(1, new JsonRpcBatch.Summary(-1, 0).cost(25));
-        assertEquals(25, new JsonRpcBatch.Summary(-1, 1).cost(25));
-        assertEquals(1, new JsonRpcBatch.Summary(0, 0).cost(25));
-        assertEquals(10, new JsonRpcBatch.Summary(10, 0).cost(25));
-        //8 ordinary requests and 2 silent payments subscribes
-        assertEquals(8 + 2 * 25, new JsonRpcBatch.Summary(10, 2).cost(25));
-    }
-
-    @Test
     public void malformedJsonIsLeftToTheServer() {
         assertEquals(-1, JsonRpcBatch.countItems("[{\"id\":1,", 10));
         assertEquals(-1, JsonRpcBatch.countItems("[1,2", 10));

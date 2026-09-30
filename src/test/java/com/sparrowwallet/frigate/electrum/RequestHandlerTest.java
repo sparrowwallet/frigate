@@ -53,6 +53,7 @@ public class RequestHandlerTest {
     private RequestHandler handler;
     private Thread handlerThread;
     private final RecordingIndexQuerier indexQuerier = new RecordingIndexQuerier();
+    private List<com.sparrowwallet.frigate.io.Subnet> excludedSubnets = List.of();
 
     @BeforeAll
     public static void createCertificate() throws Exception {
@@ -108,8 +109,9 @@ public class RequestHandlerTest {
         Socket clientSocket = ssl ? SslUtil.getTrustAllSocketFactory().createSocket() : new Socket();
         client = new TestElectrumClient(clientSocket, listener.getLocalPort(), receiveBufferSize);
         Socket serverSide = listener.accept();
+        ConnectionGate gate = new ConnectionGate(10, 10, Long.MAX_VALUE, Integer.MAX_VALUE, excludedSubnets);
 
-        handler = new RequestHandler(serverSide, null, indexQuerier, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()),
+        handler = new RequestHandler(serverSide, null, indexQuerier, gate, gate.keyFor(serverSide.getInetAddress()),
                 com.sparrowwallet.frigate.io.BackendTls.trustAll());
         handlerThread = Thread.ofVirtual().name("TestRequestHandler").start(handler);
         client.request("server.version", "TestWallet", "1.4");
@@ -222,6 +224,47 @@ public class RequestHandlerTest {
         assertNotSame(indexQuerier.scans.get(0).subscription(), indexQuerier.scans.get(1).subscription());
     }
 
+    /**
+     * Sends five silent payments subscribes one at a time.
+     * @return the milliseconds they took
+     */
+    private long timeSilentPaymentsSubscribes() throws Exception {
+        long start = System.nanoTime();
+        for(int i = 0; i < 5; i++) {
+            client.request("blockchain.silentpayments.subscribe", SCAN_PRIVATE_KEY, SPEND_PUBLIC_KEY);
+        }
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+    }
+
+    @Test
+    public void silentPaymentsSubscribesBeyondBucketAreDelayed() throws Exception {
+        Config.get().getLimits().setSilentPaymentsSubscribeBurst(2);
+        Config.get().getLimits().setSilentPaymentsSubscribeIntervalSeconds(1);
+        connect(false, 0);
+        long pacedBefore = ServerMetrics.getSilentPaymentsSubscribesPaced();
+
+        //the burst covers two subscribes, and the other three wait a second each
+        long elapsedMillis = timeSilentPaymentsSubscribes();
+
+        assertTrue(elapsedMillis >= 2800 && elapsedMillis < 6000, "elapsed " + elapsedMillis + "ms");
+        assertEquals(5, indexQuerier.scans.size());
+        assertEquals(3, ServerMetrics.getSilentPaymentsSubscribesPaced() - pacedBefore);
+    }
+
+    @Test
+    public void silentPaymentsSubscribesFromExcludedSubnetAreNotPaced() throws Exception {
+        Config.get().getLimits().setSilentPaymentsSubscribeBurst(2);
+        Config.get().getLimits().setSilentPaymentsSubscribeIntervalSeconds(1);
+        excludedSubnets = List.of(com.sparrowwallet.frigate.io.Subnet.parse("127.0.0.1/32"), com.sparrowwallet.frigate.io.Subnet.parse("::1/128"));
+        connect(false, 0);
+        long pacedBefore = ServerMetrics.getSilentPaymentsSubscribesPaced();
+
+        long elapsedMillis = timeSilentPaymentsSubscribes();
+
+        assertTrue(elapsedMillis < 2000, "elapsed " + elapsedMillis + "ms");
+        assertEquals(0, ServerMetrics.getSilentPaymentsSubscribesPaced() - pacedBefore);
+    }
+
     @Test
     public void statusQueuedBeforeUnsubscribeIsNotDelivered() throws Exception {
         connect(false, 4096);
@@ -282,7 +325,8 @@ public class RequestHandlerTest {
         };
         client = new TestElectrumClient(new Socket(), listener.getLocalPort(), 0);
         Socket serverSide = listener.accept();
-        handler = new RequestHandler(serverSide, null, indexQuerier, new ConnectionGate(10, 10), ConnectionGate.IpKey.of(serverSide.getInetAddress()),
+        ConnectionGate gate = new ConnectionGate(10, 10, Long.MAX_VALUE, Integer.MAX_VALUE, List.of());
+        handler = new RequestHandler(serverSide, null, indexQuerier, gate, gate.keyFor(serverSide.getInetAddress()),
                 com.sparrowwallet.frigate.io.BackendTls.trustAll());
         handlerThread = Thread.ofVirtual().name("TestRequestHandler").start(handler);
         client.request("server.version", "TestWallet", "1.4");

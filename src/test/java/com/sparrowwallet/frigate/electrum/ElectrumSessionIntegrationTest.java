@@ -45,6 +45,8 @@ public class ElectrumSessionIntegrationTest {
         config.getServer().setBackendReconnectMaxBackoffSeconds(1);
         config.getLimits().setMaxRequestBytes(MAX_REQUEST_BYTES);
         config.getLimits().setMaxBatchSize(MAX_BATCH_SIZE);
+        //test clients connect over loopback, which is excluded from limits by default
+        config.getLimits().setExcludedSubnets(List.of());
         Config.setInstance(config);
         startServer();
     }
@@ -290,6 +292,21 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void defaultBatchLimitAcceptsSparrowsMerkleProofBatches() throws Exception {
+        Config.get().getLimits().setMaxBatchSize(null);
+        Config.get().getLimits().setMaxRequestBytes(null);
+        TestElectrumClient client = connectClient();
+        List<String> scriptHashes = IntStream.range(0, 250).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
+
+        JsonNode responses = client.requestBatch("blockchain.scripthash.get_history", scriptHashes);
+
+        assertEquals(250, responses.size());
+        for(JsonNode response : responses) {
+            assertTrue(response.path("result").isArray(), response.toString());
+        }
+    }
+
+    @Test
     public void batchOverLimitIsRejectedAndSessionContinues() throws Exception {
         TestElectrumClient client = connectClient();
         List<String> scriptHashes = IntStream.range(0, MAX_BATCH_SIZE + 1).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
@@ -304,6 +321,18 @@ public class ElectrumSessionIntegrationTest {
         //none of the batch was processed
         assertTrue(backend.getSubscribedConnections(scriptHash(0)).isEmpty());
         assertTrue(client.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
+    }
+
+    @Test
+    public void excludedClientsSkipTheBatchCap() throws Exception {
+        Config.get().getLimits().setExcludedSubnets(null);
+        startServer();
+        TestElectrumClient client = connectClient();
+        List<String> scriptHashes = IntStream.range(0, MAX_BATCH_SIZE + 1).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
+
+        JsonNode responses = client.requestBatch("blockchain.scripthash.get_history", scriptHashes);
+
+        assertEquals(MAX_BATCH_SIZE + 1, responses.size());
     }
 
     @Test
@@ -350,22 +379,39 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
-    public void subscriptionsBeyondSessionCapAreRefused() throws Exception {
-        Config.get().getLimits().setMaxSubscriptionsPerSession(3);
-        TestElectrumClient client = connectClient();
-        for(int i = 0; i < 3; i++) {
-            subscribe(client, scriptHash(i));
-        }
+    public void connectionsBeyondPerIpCapAreRefused() throws Exception {
+        Config.get().getLimits().setMaxConnectionsPerIp(2);
+        startServer();
+        connectClient();
+        connectClient();
 
-        assertSubscriptionLimitError(client.request("blockchain.scripthash.subscribe", scriptHash(3)));
+        TestElectrumClient refused = new TestElectrumClient(server.getTcpLocalPort());
+        clients.add(refused);
+        refused.send("server.version", "TestWallet", "1.4");
+        assertTrue(refused.awaitDisconnect(5, TimeUnit.SECONDS));
+        assertEquals(2, server.getSessions().size());
+    }
+
+    @Test
+    public void subscriptionsBeyondPerIpCapAreRefused() throws Exception {
+        Config.get().getLimits().setMaxSubscriptionsPerIp(3);
+        startServer();
+        TestElectrumClient first = connectClient();
+        subscribe(first, scriptHash(0));
+        subscribe(first, scriptHash(1));
+        TestElectrumClient second = connectClient();
+        subscribe(second, scriptHash(2));
+
+        //the cap is shared by the sessions from one address
+        assertSubscriptionLimitError(second.request("blockchain.scripthash.subscribe", scriptHash(3)));
         //the refused subscription never reached the backend
         assertTrue(backend.getSubscribedConnections(scriptHash(3)).isEmpty());
         //a subscription the client already has is not counted again
-        subscribe(client, scriptHash(0));
+        subscribe(second, scriptHash(2));
 
         //an unsubscribe frees a slot
-        client.request("blockchain.scripthash.unsubscribe", scriptHash(0));
-        subscribe(client, scriptHash(3));
+        first.request("blockchain.scripthash.unsubscribe", scriptHash(0));
+        subscribe(second, scriptHash(3));
         assertEquals(3, server.getConnectionGate().getSubscriptionCount());
     }
 
@@ -405,35 +451,24 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
-    public void requestsBeyondBucketAreDelayedNotRejected() throws Exception {
-        Config.get().getLimits().setRequestTokens(5);
-        Config.get().getLimits().setRequestTokensPerSecond(10);
-        TestElectrumClient paced = connectClient();
-        TestElectrumClient other = connectClient();
-        long pacedBefore = server.getStats().requestsPaced();
+    public void ordinaryRequestsAreNotPaced() throws Exception {
+        Config.get().getLimits().setSilentPaymentsSubscribeBurst(1);
+        Config.get().getLimits().setSilentPaymentsSubscribeIntervalSeconds(10);
+        TestElectrumClient client = connectClient();
+        long pacedBefore = server.getStats().silentPaymentsSubscribesPaced();
 
-        //the bucket holds at most 5 tokens when the requests start (server.version took one, which may have refilled while the second
-        //client connected), so at least 19 of the 24 requests wait for refills: at least 1.9 seconds at 10 per second, asserted
-        //below as 1.8 seconds to allow for timer granularity
         long start = System.nanoTime();
         List<Integer> ids = new ArrayList<>();
         for(int i = 0; i < 24; i++) {
-            ids.add(paced.send("blockchain.scripthash.get_history", scriptHash(i)));
+            ids.add(client.send("blockchain.scripthash.get_history", scriptHash(i)));
         }
-
-        //another session has its own bucket, so it is not slowed
-        long otherStart = System.nanoTime();
-        assertTrue(other.request("blockchain.scripthash.get_history", scriptHash(0)).path("result").isArray());
-        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - otherStart) < 1000);
-
         for(int id : ids) {
-            assertTrue(paced.awaitResponse(id).path("result").isArray());
+            assertTrue(client.awaitResponse(id).path("result").isArray());
         }
+
         long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
-        assertTrue(elapsedMillis >= 1800 && elapsedMillis < 5000, "elapsed " + elapsedMillis + "ms");
-        //the requests that waited for tokens are counted: at least the 19 beyond the bucket's 5, and none of the other client's
-        long delayed = server.getStats().requestsPaced() - pacedBefore;
-        assertTrue(delayed >= 19 && delayed <= 24, "delayed " + delayed);
+        assertTrue(elapsedMillis < 1500, "elapsed " + elapsedMillis + "ms");
+        assertEquals(0, server.getStats().silentPaymentsSubscribesPaced() - pacedBefore);
     }
 
     @Test

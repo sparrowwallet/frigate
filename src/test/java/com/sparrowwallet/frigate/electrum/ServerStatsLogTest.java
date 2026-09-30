@@ -65,7 +65,7 @@ public class ServerStatsLogTest {
         ServerStats current = new ServerStats(124, 94, 3402, 0, 0, 1004, true, 124, 124, 0, 0, null, null, null, 4_318);
 
         assertEquals(Optional.of("Aggregate server stats: now [sessions:120, IPs:90, scripthash subscriptions:3400] "
-                + "last 1h [requests delayed by pacing:4070]"), ServerStatsLog.formatUsage(current, previous, 0));
+                + "last 1h [silent payments subscribes delayed by pacing:4070]"), ServerStatsLog.formatUsage(current, previous, 0));
     }
 
     @Test
