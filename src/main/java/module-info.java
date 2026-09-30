@@ -23,5 +23,6 @@ module com.sparrowwallet.frigate {
     exports com.sparrowwallet.frigate.index;
     exports com.sparrowwallet.frigate.cli;
     opens com.sparrowwallet.frigate.control to com.google.common;
+    opens com.sparrowwallet.frigate.electrum to simple.json.rpc.server;
     opens com.sparrowwallet.frigate.io to com.fasterxml.jackson.databind;
 }
