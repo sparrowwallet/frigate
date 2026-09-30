@@ -62,7 +62,7 @@ connect = true
 # memoryLimit = "8GB"            # cap DuckDB memory usage (default: 80% of system RAM)
 # maxLabels = 10                 # maximum number of labels accepted per silent payments subscription
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
-# metricsEnabled = true          # hourly aggregate scan stats log line (default: true)
+# metricsEnabled = true          # hourly privacy-preserving aggregate log lines of scan stats and server usage (default: true)
 
 [server]
 # host = "ssl://xyz.com:50002"   # advertised in server.features; use array for multiple. Omit to advertise nothing.
@@ -70,7 +70,33 @@ connect = true
 # ssl = "ssl://0.0.0.0:50002"    # SSL listener bind URL; omit to disable
 # sslCert = "cert.pem"           # PEM certificate (chain allowed); bare filename resolves under Frigate's home dir, or use an absolute path
 # sslKey  = "key.pem"            # PEM-encoded PKCS#8 private key; bare filename resolves under Frigate's home dir, or use an absolute path
+# sslReloadSeconds = 300         # how often to check the certificate and key files, reloading them without a restart when renewed;
+#                                # 0 or less uses the default (reloading does nothing unless the files change)
+# donationAddress = ""           # address served for server.donation_address
+# bannerFile = "banner.txt"      # text served for server.banner (re-read when changed); bare filename resolves under Frigate's home dir
+# adminPort = 50003              # loopback-only admin JSON-RPC port offering getinfo, for health checks; 0 or absent disables it
+# shutdownDrainSeconds = 10      # on shutdown, how long sessions may take to finish the request they are handling
+# healthStatsEnabled = true      # log backend and index health every 5 minutes, without counts (usage is logged hourly, per [scan] metricsEnabled)
 # backendElectrumServer = "tcp://localhost:60001"   # backend must listen on a port distinct from Frigate's tcp/ssl listeners above
+# backendRequestTimeoutSeconds = 120                # per-request timeout on each session's backend connection; expiry closes that connection
+# backendReconnectMaxBackoffSeconds = 60            # maximum delay between attempts to reconnect a session's lost backend connection
+# backendPingIntervalSeconds = 60                   # keepalive ping on a session's idle backend connection
+# backendSslCertFile = "backend.pem"                # pin an ssl:// backend to exactly this PEM certificate (overrides backendSslVerify)
+# backendSslVerify = false                          # verify an ssl:// backend's certificate against trusted CAs and its hostname
+
+[limits]
+# maxConnections = 1000                # global concurrent session cap
+# maxConnectionsPerIp = 12             # per client IP (IPv6: per /64); loopback exempt
+# maxRequestBytes = 1000000            # max JSON-RPC line length; oversized requests disconnect
+# maxBatchSize = 100                   # max requests per JSON-RPC batch array
+# sessionTimeoutSeconds = 600          # idle disconnect; Electrum clients ping every ~60s
+# maxSubscriptionsPerSession = 25000   # scripthash subscriptions per connection
+# maxSubscriptionsPerIp = 75000        # scripthash subscriptions per client IP
+# maxSubscriptions = 1000000           # global scripthash subscription cap
+# notificationQueueSize = 1000         # notifications (headers, silent payments) a client may fall behind before it is disconnected;
+#                                      # raise for clients on slow links receiving very large silent payments scans
+# requestTokens = 1000                 # token-bucket burst per session (batch items count individually)
+# requestTokensPerSecond = 100         # token refill rate; requests delay, never error
 ```
 
 ### Core
@@ -121,6 +147,7 @@ Requests exceeding either limit are rejected with a JSON-RPC `-32602 Invalid par
 
 When `metricsEnabled` is true (default), Frigate emits one `Aggregate SP scan stats` log line per hour summarising historical scan throughput across all scans in the window.
 The output is bucketed by result count and duration, rounded, and suppresses any bucket with fewer than ten samples, so no per-client scan information is exposed. Set to `false` to disable the line entirely.
+The same setting controls the hourly `Aggregate server stats` line described in [Stats](#stats).
 
 ### Server
 
@@ -146,6 +173,35 @@ Because Frigate occupies the canonical 50001/50002 Electrum ports, a co-located 
 The Electrum protocol from 1.3 to 1.6 is supported — for 1.6, ensure Bitcoin Core 28 or higher.
 
 When `backendElectrumServer` is set, also configure `zmqSequenceEndpoint` under `[core]` — see the [Core](#core) section above for why this pairing matters.
+
+Each client session has its own connection to the backend, opened when the client connects and closed when it disconnects, so the backend frees the session's subscriptions exactly as it would for a directly connected client.
+If a session's backend connection is lost, Frigate reconnects with exponential backoff (up to `backendReconnectMaxBackoffSeconds`), negotiates the client's protocol version again and resubscribes the session's scripthashes.
+Any status that changed while the connection was down is then sent to the client, which stays connected throughout.
+While the backend is unreachable, requests that need it fail at once with a `-32000` error.
+A request the backend has not answered within `backendRequestTimeoutSeconds` (default 120) fails with the same error and closes that connection, which is then reconnected.
+An idle backend connection is kept alive with a `server.ping` every `backendPingIntervalSeconds` (default 60).
+
+For an `ssl://` backend, Frigate accepts any certificate by default, which suits a localhost backend with a self-signed certificate, and logs a warning at startup.
+Set `backendSslCertFile` to pin the backend to exactly that PEM certificate, the usual approach for a remote backend with a self-signed certificate.
+Alternatively, set `backendSslVerify = true` to require a certificate issued by a certificate authority the JVM trusts, and matching the backend's hostname.
+Both settings are ignored, with a warning, when the backend is not `ssl://`.
+
+`server.donation_address` returns `donationAddress`, or an empty string if it is not set, rather than the backend's address.
+`server.banner` returns the contents of `bannerFile` if one is set (up to 16 KB, re-read when it changes), and otherwise a generated banner.
+
+### Limits
+
+The settings under `[limits]` protect Frigate when it is open to the public, and their defaults are chosen for a public server, following Fulcrum and ElectrumX where they have equivalents.
+
+- **Connections**: at most `maxConnections` sessions in total, and `maxConnectionsPerIp` per client IP address (per /64 prefix for IPv6). A connection over either limit is closed without a response.
+- **Requests**: a request longer than `maxRequestBytes` is answered with a `-32600 request too large` error and the connection is closed. A batch of more than `maxBatchSize` requests is rejected whole with a `-32600 batch too large` error, and the session continues. A request containing control characters is answered with a `-32700` parse error.
+- **Pacing**: each session draws its requests from a token bucket holding `requestTokens`, refilled at `requestTokensPerSecond`, with each request in a batch counting separately and a `blockchain.silentpayments.subscribe` costing 25. Requests beyond the bucket are delayed rather than rejected, so a large wallet's initial sync is slowed rather than refused.
+- **Subscriptions**: scripthash subscriptions are limited per session (`maxSubscriptionsPerSession`), per IP (`maxSubscriptionsPerIp`) and in total (`maxSubscriptions`). A subscription over any limit is refused with a `-32005 subscription limit exceeded` error; subscribing again to a scripthash the session already has is not counted.
+- **Idle sessions**: a session from which nothing is received for `sessionTimeoutSeconds` is closed. Electrum clients ping about every minute, so only dead or abandoned sessions are affected.
+- **Slow clients**: a client that falls `notificationQueueSize` notifications behind is disconnected. Scripthash status notifications are coalesced, so this is reached through header and silent payments notifications; raise it for clients on slow links receiving very large silent payments scans.
+
+Connections from the loopback address are exempt from the per-IP limits, though not from the overall ones, so local tools such as the Frigate CLI are not limited.
+Behind a reverse proxy on the same host, every client arrives from the loopback address, so only the overall limits apply.
 
 ## Usage
 
@@ -275,6 +331,11 @@ WantedBy=multi-user.target
 For public deployments, supply a real certificate via `sslCert` and `sslKey` rather than the self-signed example in [Configuration > Server](#server).
 The `host` field under `[server]` is advertised in `server.features` and should match the hostname clients use when validating the certificate.
 TLS termination at a reverse proxy is also supported – in that case, run Frigate with `tcp = "tcp://127.0.0.1:50001"` and terminate TLS upstream.
+Note that clients then all appear to come from the loopback address, which is exempt from the per-IP [limits](#limits).
+
+Frigate checks the certificate and key files every `sslReloadSeconds` (default 300) and reloads them when they change, so a renewed certificate (from certbot, for example) is served without a restart.
+New connections use the new certificate, while existing ones are unaffected.
+If the files are incomplete when checked, or the key does not match the certificate, Frigate keeps serving the current certificate, logs a warning, and tries again when the files change.
 
 ### Resource Requirements
 
@@ -296,6 +357,21 @@ Indexing time depends on RPC throughput from Bitcoin Core.
 Logs are written to `frigate.log` in the per-network data directory (`~/.frigate/` for mainnet, `~/.frigate/<network>/` otherwise) and to stdout. 
 The default appender does not rotate; in production, configure `logrotate` or run under a service manager that captures stdout (e.g. `systemd-journald`).
 
+### Stats
+
+Frigate logs two stats lines, kept apart so that what is logged frequently cannot expose individual clients:
+
+- Every 5 minutes, a `Server health` line reports whether the backend is connected for all, some or no sessions, whether any backend reconnects or request timeouts occurred, and the index height against the chain tip and the mempool size. It contains no counts of sessions or subscriptions. Set `healthStatsEnabled = false` under `[server]` to disable it.
+- Every hour, when `metricsEnabled` is true under `[scan]`, an `Aggregate server stats` line reports the sessions, IP addresses and subscriptions connected at that moment, and the notifications delivered and largest notification backlog over the hour. As with the scan stats, each figure is rounded to the nearest ten and omitted below ten.
+
+For health checks from monitoring tools, set `adminPort` under `[server]` to enable a JSON-RPC admin endpoint, which is always bound to the loopback address.
+Its single `getinfo` method returns the version, network, uptime, effective limits and the same health figures, with usage figures rounded as in the hourly line.
+It deliberately offers nothing about individual sessions.
+
+```shell
+echo '{"jsonrpc":"2.0","id":1,"method":"getinfo","params":[]}' | nc -w 2 127.0.0.1 50003
+```
+
 ### Backup
 
 The tweak index can be rebuilt from Bitcoin Core at any time, but a rebuild from Taproot activation is slow. To minimise downtime, snapshot `db/frigate.duckdb` under the data directory while Frigate is stopped (DuckDB files are portable across operating systems and survive unclean shutdowns). 
@@ -305,6 +381,9 @@ The `config.toml` and any TLS material in the data directory are worth including
 
 Stop Frigate, install the new release, start. 
 The DuckDB file format and the on-disk index schema are stable across Frigate releases.
+
+On shutdown, Frigate stops accepting connections and closes idle sessions at once, while sessions handling a request finish it, for up to `shutdownDrainSeconds` (default 10), before closing.
+Each session's backend connection is closed with it, and the indexes are closed only after every session has ended.
 
 ### Reorgs
 

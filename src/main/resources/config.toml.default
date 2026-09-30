@@ -22,6 +22,7 @@ connect = true
 # memoryLimit = "8GB"            # cap DuckDB memory usage (default: 80% of system RAM)
 # maxLabels = 10                 # maximum number of labels accepted per silent payments subscription
 # maxSubscriptions = 100         # maximum number of silent payments subscriptions per connection
+# metricsEnabled = true          # hourly privacy-preserving aggregate log lines of scan stats and server usage (default: true)
 
 [server]
 # host = "ssl://xyz.com:50002"   # advertised in server.features; use array for multiple. Omit to advertise nothing.
