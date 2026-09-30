@@ -42,6 +42,9 @@ public class Index {
     private static final String AUDIT_SCAN_KEY_ENV = "FRIGATE_AUDIT_SCAN_KEY";
     private static final String AUDIT_SPEND_KEY_ENV = "FRIGATE_AUDIT_SPEND_KEY";
 
+    //shared across scans, so concurrent scans' progress threads are numbered apart
+    private static final ThreadFactory PROGRESS_THREAD_FACTORY = new ThreadFactoryBuilder().setNameFormat("IndexQueryProgress-%d").setDaemon(true).build();
+
     private final DbManager dbManager;
     private final AtomicInteger lastBlockIndexed = new AtomicInteger(-1);
     private final int batchSize;
@@ -88,6 +91,9 @@ public class Index {
                 }
             });
             seedIndexedBlockIfEmpty();
+            //resume from the persisted marker: otherwise, after a restart with nothing to catch up, the first block indexed reports
+            //its range as starting from startHeight, and each subscription's per-block scan covers the whole index
+            lastBlockIndexed.accumulateAndGet(getLastBlockIndexed(), Math::max);
         } catch(Exception e) {
             throw new ConfigurationException("Error initialising index", e);
         }
@@ -396,12 +402,7 @@ public class Index {
                     bindParameters(statement, scanAddress, subscription, startHeight, endHeight, mempoolTxids, isHistorical, totalRows);
 
                     if(isHistorical) {
-                        try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, r -> {
-                            ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQueryProgress-%d").build();
-                            Thread t = namedThreadFactory.newThread(r);
-                            t.setDaemon(true);
-                            return t;
-                        })) {
+                        try(ScheduledThreadPoolExecutor queryProgressExecutor = new ScheduledThreadPoolExecutor(1, PROGRESS_THREAD_FACTORY)) {
                             queryProgressExecutor.scheduleAtFixedRate(() -> {
                                 try {
                                     if(queryProgressExecutor.isShutdown() || dbManager.isShutdown() || isUnsubscribed(scanAddress, subscriptionStatusRef) || cancelled.getAsBoolean()) {

@@ -20,19 +20,22 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 public class IndexQuerier {
     private static final Logger log = LoggerFactory.getLogger(IndexQuerier.class);
 
     public static final double PROGRESS_COMPLETE = 1.0d;
+    //a scan of a new block's rows should take milliseconds, so one taking this long is scanning far more than it should
+    private static final long SLOW_BLOCK_SCAN_MILLIS = 5000;
 
     private final Index blocksIndex;
     private final Index mempoolIndex;
     private final HistoricalScanMetrics metrics;
     private final ScheduledExecutorService metricsExecutor;
+    private final AtomicInteger lastSlowScanLoggedHeight = new AtomicInteger(-1);
 
     public IndexQuerier(Index blocksIndex, Index mempoolIndex) {
         this.blocksIndex = blocksIndex;
@@ -52,12 +55,7 @@ public class IndexQuerier {
         }
     }
 
-    private final ExecutorService queryPool = Executors.newFixedThreadPool(10, r -> {
-        ThreadFactory namedThreadFactory = new ThreadFactoryBuilder().setNameFormat("IndexQuery-%d").build();
-        Thread t = namedThreadFactory.newThread(r);
-        t.setDaemon(true);
-        return t;
-    });
+    private final ExecutorService queryPool = Executors.newFixedThreadPool(10, new ThreadFactoryBuilder().setNameFormat("IndexQuery-%d").setDaemon(true).build());
 
     private void emitMetrics() {
         try {
@@ -79,7 +77,11 @@ public class IndexQuerier {
             long startMillis = isHistorical ? System.currentTimeMillis() : 0L;
             try {
                 SilentPaymentsSubscription notificationSubscription = new SilentPaymentsSubscription(scanAddress.toString(), subscription.getLabels().toArray(new Integer[0]), subscription.getStartHeight());
+                long blocksStartNanos = System.nanoTime();
                 List<SilentPaymentsTxEntry> history = blocksIndex.getHistoryAsync(scanAddress, notificationSubscription, startHeight, endHeight, null, subscriptionStatusRef, cancelled, isHistorical);
+                if(!isHistorical) {
+                    logSlowBlockScan(startHeight, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - blocksStartNanos));
+                }
                 List<SilentPaymentsTxEntry> mempoolHistory = getMempoolHistory(scanAddress, null, subscriptionStatusRef, notificationSubscription, cancelled);
                 history.addAll(mempoolHistory);
                 long scanDurationMillis = isHistorical ? System.currentTimeMillis() - startMillis : 0L;
@@ -114,6 +116,16 @@ public class IndexQuerier {
                 log.error("Mempool scan task failed for " + scanAddress, t);
             }
         });
+    }
+
+    /**
+     * Warns of a scan of new blocks that took far longer than their rows should, at most once per start height: every subscription
+     * scans the same blocks, and a line per subscription would reveal how many there are.
+     */
+    private void logSlowBlockScan(Integer startHeight, long millis) {
+        if(millis >= SLOW_BLOCK_SCAN_MILLIS && startHeight != null && lastSlowScanLoggedHeight.getAndSet(startHeight) != startHeight) {
+            log.warn("Silent payments scan of new blocks from height " + startHeight + " took " + millis + "ms");
+        }
     }
 
     private List<SilentPaymentsTxEntry> getMempoolHistory(SilentPaymentScanAddress scanAddress, Set<Sha256Hash> mempoolTxids, WeakReference<SubscriptionStatus> subscriptionStatusRef, SilentPaymentsSubscription notificationSubscription, BooleanSupplier cancelled) {
