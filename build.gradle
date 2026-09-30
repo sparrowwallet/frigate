@@ -111,6 +111,55 @@ jlink {
 
 tasks.jlink.finalizedBy('addUserWritePermission')
 
+if(os.isMacOsX()) {
+    tasks.jpackageImage.finalizedBy('patchLauncherUuids')
+    tasks.jpackage.dependsOn('patchLauncherUuids')
+}
+
+// Give each launcher a Frigate LC_UUID, since the stock jpackage launcher shares its Mach-O UUID with every app packaged by the same JDK
+tasks.register('patchLauncherUuids') {
+    dependsOn tasks.jpackageImage
+    def appDir = layout.buildDirectory.dir('jpackage/Frigate.app').get().asFile
+    doLast {
+        def launchers = ['Frigate', 'frigate-cli'].collect { launcherName -> new File(appDir, "Contents/MacOS/${launcherName}") }
+        launchers.each { launcher ->
+            def launcherUuid = UUID.nameUUIDFromBytes("com.sparrowwallet.frigate.${launcher.name}.${releaseArch}".getBytes('UTF-8'))
+            byte[] bytes = launcher.bytes
+            def buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            if(Integer.toUnsignedLong(buffer.getInt(0)) != 0xfeedfacfL) {
+                throw new GradleException("Launcher ${launcher} is not a thin 64-bit Mach-O binary")
+            }
+
+            int ncmds = buffer.getInt(16)
+            int offset = 32
+            int uuidOffset = -1
+            for(int i = 0; i < ncmds && uuidOffset < 0; i++) {
+                if(buffer.getInt(offset) == 0x1b) {
+                    uuidOffset = offset + 8
+                } else {
+                    offset += buffer.getInt(offset + 4)
+                }
+            }
+            if(uuidOffset < 0) {
+                throw new GradleException("Launcher ${launcher} has no LC_UUID load command")
+            }
+
+            buffer.order(java.nio.ByteOrder.BIG_ENDIAN)
+            buffer.putLong(uuidOffset, launcherUuid.mostSignificantBits)
+            buffer.putLong(uuidOffset + 8, launcherUuid.leastSignificantBits)
+            launcher.bytes = bytes
+        }
+
+        //Patching invalidates the ad hoc signatures applied by jpackage, so re-sign the secondary launcher, then the app with its main launcher
+        [launchers[1], appDir].each { target ->
+            def codesign = new ProcessBuilder('codesign', '--force', '--sign', '-', target.path).inheritIO().start()
+            if(codesign.waitFor() != 0) {
+                throw new GradleException("Ad hoc signing ${target} failed")
+            }
+        }
+    }
+}
+
 tasks.register('addUserWritePermission', Exec) {
     if(os.isWindows()) {
         commandLine 'icacls', layout.buildDirectory.dir('image/legal').get().toString(), '/grant', 'Users:(OI)(CI)F', '/T'
