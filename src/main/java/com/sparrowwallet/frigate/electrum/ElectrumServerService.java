@@ -111,7 +111,8 @@ public class ElectrumServerService {
     @JsonRpcMethod("server.banner")
     public String getServerBanner() {
         checkVersionNegotiated();
-        return Frigate.SERVER_NAME + " " + Frigate.SERVER_VERSION + (bitcoindClient != null ? "\n" + bitcoindClient.getNetworkInfo().subversion() + (bitcoindClient.getNetworkInfo().networkactive() ? "" : " (disconnected)") : "");
+        String generated = Frigate.SERVER_NAME + " " + Frigate.SERVER_VERSION + (bitcoindClient != null ? "\n" + bitcoindClient.getNetworkInfo().subversion() + (bitcoindClient.getNetworkInfo().networkactive() ? "" : " (disconnected)") : "");
+        return ServerBanner.get(Config.get().getServer().getBannerFileObj(), generated);
     }
 
     @JsonRpcMethod("server.features")
@@ -176,11 +177,7 @@ public class ElectrumServerService {
     @JsonRpcMethod("server.donation_address")
     public String getDonationAddress() {
         checkVersionNegotiated();
-        if(electrumBackendService != null) {
-            return electrumBackendService.getDonationAddress();
-        }
-
-        throw new UnsupportedOperationException("Configure backendElectrumServer to use server.donation_address");
+        return Config.get().getServer().getDonationAddress();
     }
 
     @JsonRpcMethod("server.peers.subscribe")

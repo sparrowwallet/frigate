@@ -95,9 +95,11 @@ public class ElectrumSessionIntegrationTest {
         JsonNode notification = client.pollNotification(10, TimeUnit.SECONDS);
         assertNotNull(notification, "no notification for " + scriptHash);
         assertEquals("blockchain.scripthash.subscribe", notification.path("method").asText());
-        assertEquals(scriptHash, TestElectrumClient.param(notification, 0, "scripthash").asText());
-        JsonNode notifiedStatus = TestElectrumClient.param(notification, 1, "status");
-        assertEquals(status, notifiedStatus.isNull() || notifiedStatus.isMissingNode() ? null : notifiedStatus.asText());
+        assertEquals(scriptHash, TestElectrumClient.param(notification, 0).asText());
+        //the status is always present, and a null status is sent explicitly as null
+        assertEquals(2, notification.path("params").size(), notification.toString());
+        JsonNode notifiedStatus = TestElectrumClient.param(notification, 1);
+        assertEquals(status, notifiedStatus.isNull() ? null : notifiedStatus.asText());
     }
 
     private static void assertNoNotification(TestElectrumClient client, long millis) throws InterruptedException {
@@ -500,6 +502,30 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void donationAddressIsServedFromConfigNotTheBackend() throws Exception {
+        TestElectrumClient client = connectClient();
+        assertEquals("", client.request("server.donation_address").path("result").asText());
+
+        Config.get().getServer().setDonationAddress("bc1qexampledonation");
+        assertEquals("bc1qexampledonation", client.request("server.donation_address").path("result").asText());
+    }
+
+    @Test
+    public void bannerIsServedFromFile() throws Exception {
+        TestElectrumClient client = connectClient();
+        assertTrue(client.request("server.banner").path("result").asText().startsWith("Frigate"));
+
+        java.nio.file.Path banner = java.nio.file.Files.createTempFile("banner", ".txt");
+        try {
+            java.nio.file.Files.writeString(banner, "Operated by example.com");
+            Config.get().getServer().setBannerFile(banner.toString());
+            assertEquals("Operated by example.com", client.request("server.banner").path("result").asText());
+        } finally {
+            java.nio.file.Files.deleteIfExists(banner);
+        }
+    }
+
+    @Test
     public void idleClientIsDisconnected() throws Exception {
         Config.get().getLimits().setSessionTimeoutSeconds(1);
         TestElectrumClient client = connectClient();
@@ -575,6 +601,6 @@ public class ElectrumSessionIntegrationTest {
         //coalesced statuses are bounded by the subscription count, so the slow client is not disconnected
         assertFalse(slow.awaitDisconnect(200, TimeUnit.MILLISECONDS));
         slow.resumeReading();
-        await(() -> slow.getNotifications().stream().anyMatch(n -> TestElectrumClient.param(n, 1, "status").asText().equals(status(9))), "slow client to catch up");
+        await(() -> slow.getNotifications().stream().anyMatch(n -> TestElectrumClient.param(n, 1).asText().equals(status(9))), "slow client to catch up");
     }
 }

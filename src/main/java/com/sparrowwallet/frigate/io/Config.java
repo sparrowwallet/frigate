@@ -500,6 +500,8 @@ public class Config {
         private Boolean healthStatsEnabled;
         private Integer adminPort;
         private Integer shutdownDrainSeconds;
+        private String donationAddress;
+        private String bannerFile;
         private Boolean backendSslVerify;
         private String backendSslCertFile;
 
@@ -741,6 +743,33 @@ public class Config {
         @JsonIgnore
         public File getBackendSslCertFileObj() {
             return backendSslCertFile == null || backendSslCertFile.isBlank() ? null : resolveFrigateDirPath(backendSslCertFile, backendSslCertFile);
+        }
+
+        /**
+         * @return the donation address served for server.donation_address, or empty if none is configured
+         */
+        public String getDonationAddress() {
+            return donationAddress == null ? "" : donationAddress.trim();
+        }
+
+        public void setDonationAddress(String donationAddress) {
+            this.donationAddress = donationAddress;
+        }
+
+        public String getBannerFile() {
+            return bannerFile;
+        }
+
+        public void setBannerFile(String bannerFile) {
+            this.bannerFile = bannerFile;
+        }
+
+        /**
+         * @return the banner file served for server.banner, resolved like sslCert, or null to serve the generated banner
+         */
+        @JsonIgnore
+        public File getBannerFileObj() {
+            return bannerFile == null || bannerFile.isBlank() ? null : resolveFrigateDirPath(bannerFile, bannerFile);
         }
 
         /**

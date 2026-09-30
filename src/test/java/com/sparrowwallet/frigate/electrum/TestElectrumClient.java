@@ -130,12 +130,14 @@ public class TestElectrumClient implements Closeable {
     }
 
     /**
-     * Returns a notification parameter by position or name. Frigate sends named params (the JSON-RPC client library's default),
-     * while the Electrum protocol documents positional ones, so both are accepted. A null status is omitted from named params.
+     * Returns a notification parameter by position, failing if the params are not positional, as the Electrum protocol specifies.
      */
-    public static JsonNode param(JsonNode notification, int index, String name) {
+    public static JsonNode param(JsonNode notification, int index) {
         JsonNode params = notification.path("params");
-        return params.isArray() ? params.path(index) : params.path(name);
+        if(!params.isArray()) {
+            throw new AssertionError("Notification params are not positional: " + notification);
+        }
+        return params.path(index);
     }
 
     /** @return the next notification, or null if none arrives within the timeout */

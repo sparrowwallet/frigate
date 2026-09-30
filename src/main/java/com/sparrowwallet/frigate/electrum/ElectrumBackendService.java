@@ -25,9 +25,6 @@ public interface ElectrumBackendService {
     @JsonRpcMethod("server.add_peer")
     boolean addPeer(@JsonRpcParam("features") ServerFeatures features);
 
-    @JsonRpcMethod("server.donation_address")
-    String getDonationAddress();
-
     @JsonRpcMethod("server.peers.subscribe")
     List<ServerPeer> subscribePeers();
 

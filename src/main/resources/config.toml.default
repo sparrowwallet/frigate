@@ -31,6 +31,8 @@ connect = true
 # sslKey  = "key.pem"            # PEM-encoded PKCS#8 private key; bare filename resolves under Frigate's home dir, or use an absolute path
 # sslReloadSeconds = 300         # how often to check the certificate and key files, reloading them without a restart when renewed;
 #                                # 0 or less uses the default (reloading does nothing unless the files change)
+# donationAddress = ""           # address served for server.donation_address
+# bannerFile = "banner.txt"      # text served for server.banner (re-read when changed); bare filename resolves under Frigate's home dir
 # adminPort = 50003              # loopback-only admin JSON-RPC port offering getinfo, for health checks; 0 or absent disables it
 # shutdownDrainSeconds = 10      # on shutdown, how long sessions may take to finish the request they are handling
 # healthStatsEnabled = true      # log backend and index health every 5 minutes, without counts (usage is logged hourly, per [scan] metricsEnabled)

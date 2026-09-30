@@ -3,7 +3,7 @@ package com.sparrowwallet.frigate.electrum;
 import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcError;
 import com.github.arteam.simplejsonrpc.core.domain.ErrorMessage;
 
-@JsonRpcError(code=-32003)
+@JsonRpcError(code=-32004)
 public class BroadcastFailedException extends Exception {
     private final String message;
 

@@ -158,7 +158,7 @@ public class RequestHandlerTest {
         JsonNode notification = client.pollNotification(5, TimeUnit.SECONDS);
         assertNotNull(notification);
         assertEquals("blockchain.silentpayments.subscribe", notification.path("method").asText());
-        assertEquals(1, TestElectrumClient.param(notification, 2, "history").size());
+        assertEquals(1, TestElectrumClient.param(notification, 2).size());
 
         //no longer subscribed
         handler.unsubscribeSilentPaymentsAddress(address);

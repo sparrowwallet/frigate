@@ -106,6 +106,17 @@ public class LimitsConfigTest {
     }
 
     @Test
+    public void donationAddressAndBannerFileAreParsed() throws Exception {
+        Config.ServerConfig unset = new Config().getServer();
+        assertEquals("", unset.getDonationAddress());
+        assertNull(unset.getBannerFileObj());
+
+        Config.ServerConfig set = MAPPER.readValue("[server]\ndonationAddress = \" bc1qexample \"\nbannerFile = \"/etc/frigate/banner.txt\"\n", Config.class).getServer();
+        assertEquals("bc1qexample", set.getDonationAddress());
+        assertEquals(new java.io.File("/etc/frigate/banner.txt"), set.getBannerFileObj());
+    }
+
+    @Test
     public void defaultConfigFileParses() throws Exception {
         try(InputStream in = Config.class.getResourceAsStream("/config.toml.default")) {
             assertNotNull(in);
