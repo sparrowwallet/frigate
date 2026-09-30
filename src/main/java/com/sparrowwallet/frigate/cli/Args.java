@@ -3,12 +3,14 @@ package com.sparrowwallet.frigate.cli;
 import com.beust.jcommander.IParameterValidator;
 import com.beust.jcommander.Parameter;
 import com.beust.jcommander.ParameterException;
+import com.beust.jcommander.Parameters;
 import com.sparrowwallet.drongo.Network;
 import org.slf4j.event.Level;
 
 import java.util.ArrayList;
 import java.util.List;
 
+@Parameters(separators = "=")
 public class Args {
     @Parameter(names = { "--dir", "-d" }, description = "Path to Frigate home folder")
     public String dir;
@@ -48,7 +50,12 @@ public class Args {
 
     public static class PositiveIntegerValidator implements IParameterValidator {
         public void validate(String name, String value) throws ParameterException {
-            int n = Integer.parseInt(value);
+            int n;
+            try {
+                n = Integer.parseInt(value);
+            } catch(NumberFormatException e) {
+                throw new ParameterException("Parameter " + name + " should be an integer (found " + value + ")");
+            }
             if(n < 0) {
                 throw new ParameterException("Parameter " + name + " should be positive (found " + value + ")");
             }

@@ -6,6 +6,7 @@ import com.google.common.eventbus.EventBus;
 import com.google.common.net.HostAndPort;
 import com.sparrowwallet.drongo.Drongo;
 import com.sparrowwallet.drongo.Network;
+import com.sparrowwallet.frigate.CommandLine;
 import com.sparrowwallet.frigate.Frigate;
 import com.sparrowwallet.frigate.electrum.ElectrumServerService;
 import com.sparrowwallet.frigate.electrum.ElectrumTransport;
@@ -126,7 +127,7 @@ public class FrigateCli implements Thread.UncaughtExceptionHandler {
     public static void main(String[] argv) {
         Args args = new Args();
         JCommander jCommander = JCommander.newBuilder().addObject(args).programName(APP_NAME.toLowerCase(Locale.ROOT)).acceptUnknownOptions(true).build();
-        jCommander.parse(argv);
+        CommandLine.parseOrExit(jCommander, argv);
         if(args.help) {
             jCommander.usage();
             System.exit(0);

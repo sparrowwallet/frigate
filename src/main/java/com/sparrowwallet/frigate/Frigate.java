@@ -152,7 +152,7 @@ public class Frigate {
     public static void main(String[] argv) {
         Args args = new Args();
         JCommander jCommander = JCommander.newBuilder().addObject(args).programName(SERVER_NAME.toLowerCase(Locale.ROOT)).acceptUnknownOptions(true).build();
-        jCommander.parse(argv);
+        CommandLine.parseOrExit(jCommander, argv);
         if(args.help) {
             jCommander.usage();
             System.exit(0);
