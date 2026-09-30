@@ -40,6 +40,7 @@ public class BitcoindClient {
     private static final Logger log = LoggerFactory.getLogger(BitcoindClient.class);
 
     private static final int MAX_REORG_DEPTH = 10;
+    private static final int RPC_INVALID_ADDRESS_OR_KEY = -5;
     private static final int MIN_GETBLOCK_VERBOSE_VERSION = 250000;
     public static final int MIN_SUBMIT_PACKAGE_VERSION = 280000;
 
@@ -444,6 +445,11 @@ public class BitcoindClient {
                     eligibleTransactions.put(blkTx, SilentPaymentUtils.getSecp256k1PubKey(tweak));
                 }
             }
+        } catch(SpentTransactionNotFoundException e) {
+            //a transaction it spends left the mempool (replaced or evicted) after the mempool was listed, taking this one with it; the txid is
+            //dropped so a later diff re-ingests it should it somehow still be there
+            mempoolTxIds.remove(txid);
+            log.debug("Skipping mempool transaction " + txid + ": " + e.getMessage());
         } catch(RuntimeException e) {
             //transient failure - drop the txid so a later diff re-ingests it
             mempoolTxIds.remove(txid);
@@ -667,6 +673,12 @@ public class BitcoindClient {
                 TransactionOutput txOutput = tx.getOutputs().get((int)hashIndex.getIndex());
                 addtoScriptPubKeyCache(hashIndex.getHash(), (int)hashIndex.getIndex(), txOutput.getScriptBytes());
                 scriptPubKey = getFromScriptPubKeyCache(hashIndex);
+            } catch(JsonRpcException e) {
+                if(isTransactionNotFound(e)) {
+                    throw new SpentTransactionNotFoundException(hashIndex, e);
+                }
+                log.error("Error retrieving scriptPubKey for txid " + hashIndex.getHash() + " output index " + hashIndex.getIndex(), e);
+                throw e;
             } catch(Exception e) {
                 log.error("Error retrieving scriptPubKey for txid " + hashIndex.getHash() + " output index " + hashIndex.getIndex(), e);
                 throw e;
@@ -674,6 +686,18 @@ public class BitcoindClient {
         }
 
         return scriptPubKey;
+    }
+
+    /**
+     * @return true if getrawtransaction failed because the transaction is in neither the mempool nor the chain, and not because the
+     * txindex is disabled or still being built, which Bitcoin Core reports with the same error code
+     */
+    static boolean isTransactionNotFound(JsonRpcException e) {
+        if(e.getErrorMessage() == null || e.getErrorMessage().getCode() != RPC_INVALID_ADDRESS_OR_KEY) {
+            return false;
+        }
+        String message = e.getErrorMessage().getMessage();
+        return message == null || !(message.contains("-txindex") || message.contains("being indexed"));
     }
 
     private class PollTask extends TimerTask {
@@ -907,6 +931,12 @@ public class BitcoindClient {
     }
 
     private record MempoolSeqEvent(Sha256Hash txid, boolean removed) {}
+
+    private static class SpentTransactionNotFoundException extends RuntimeException {
+        SpentTransactionNotFoundException(HashIndex hashIndex, Throwable cause) {
+            super("spent transaction " + hashIndex.getHash() + " not found in the mempool or blockchain", cause);
+        }
+    }
 
     private record ZmqDiscovery(String endpoint, boolean unsupported) {}
 }
