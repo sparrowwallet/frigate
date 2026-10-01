@@ -307,6 +307,47 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void backendNegotiatesNoHigherThanFrigate() throws Exception {
+        //a backend supporting a newer version than Frigate, which (without Bitcoin Core) supports up to 1.4.2
+        backend.setMaxProtocolVersion("1.7");
+        TestElectrumClient client = new TestElectrumClient(new Socket(), server.getTcpLocalPort(), 0);
+        clients.add(client);
+
+        JsonNode version = client.request("server.version", "TestWallet", List.of("1.4", "1.7"));
+
+        assertEquals("1.4.2", version.path("result").path(1).asText());
+        //the backend was asked for no more than Frigate supports, so the client and backend agree on the version
+        JsonNode requested = backend.getVersionRequests().getLast();
+        assertEquals("[\"1.4\",\"1.4.2\"]", requested.toString());
+
+        //a reconnected backend connection negotiates the same capped version
+        int requests = backend.getVersionRequests().size();
+        backend.dropAllConnections();
+        await(() -> backend.getVersionRequests().size() > requests, "backend reconnect to negotiate the version");
+        assertEquals(requested, backend.getVersionRequests().getLast());
+    }
+
+    @Test
+    public void versionRequestWithinFrigatesRangeIsForwardedUnchanged() throws Exception {
+        backend.setMaxProtocolVersion("1.7");
+        connectClient();
+
+        assertEquals("\"1.4\"", backend.getVersionRequests().getLast().toString());
+    }
+
+    @Test
+    public void versionRangeAboveFrigatesIsRejected() throws Exception {
+        backend.setMaxProtocolVersion("1.7");
+        TestElectrumClient client = new TestElectrumClient(new Socket(), server.getTcpLocalPort(), 0);
+        clients.add(client);
+
+        JsonNode response = client.request("server.version", "TestWallet", List.of("1.6", "1.7"));
+
+        assertEquals(-32003, errorCode(response), response.toString());
+        assertTrue(backend.getVersionRequests().isEmpty());
+    }
+
+    @Test
     public void batchOverLimitIsRejectedAndSessionContinues() throws Exception {
         TestElectrumClient client = connectClient();
         List<String> scriptHashes = IntStream.range(0, MAX_BATCH_SIZE + 1).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();

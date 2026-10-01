@@ -76,36 +76,55 @@ public class ElectrumServerService {
 
     @JsonRpcMethod("server.version")
     public List<String> getServerVersion(@JsonRpcParam("client_name") String clientName, @JsonRpcParam("protocol_version") Object protocolVersion) throws UnsupportedVersionException {
-        Version clientVersion = new Version(switch(protocolVersion) {
-            case String s -> s;
-            case List<?> versions -> {
-                if(versions.isEmpty()) throw new IllegalArgumentException("protocol_version list cannot be empty");
-                yield versions.size() > 1 ? versions.get(1).toString() : versions.get(0).toString();
-            }
-            case String[] versions -> {
-                if(versions.length == 0) throw new IllegalArgumentException("protocol_version array cannot be empty");
-                yield versions.length > 1 ? versions[1] : versions[0];
-            }
-            case null, default -> throw new IllegalArgumentException("Invalid protocol_version type: " + protocolVersion);
-        });
+        VersionRange requested = VersionRange.of(protocolVersion);
+        Version maxSupported = getMaxSupportedVersion();
+        if(requested.max().compareTo(MIN_VERSION) < 0 || requested.min().compareTo(maxSupported) > 0) {
+            throw new UnsupportedVersionException(requested.max().get());
+        }
 
-        Version backendVersion = clientVersion;
+        //the backend's results and notifications reach the client unchanged, so the backend must not negotiate a version above the one
+        //the client is told: the request it is sent is capped at Frigate's maximum
+        Version cappedMax = requested.max().compareTo(maxSupported) > 0 ? maxSupported : requested.max();
+        Object backendRequest = cappedMax == requested.max() ? protocolVersion : List.of(requested.min().get(), cappedMax.get());
+
+        Version version = cappedMax;
         if(electrumBackendService != null) {
-            List<String> backendVersions = electrumBackendService.getServerVersion(clientName, protocolVersion);
+            List<String> backendVersions = electrumBackendService.getServerVersion(clientName, backendRequest);
             //remembered so a reconnected backend connection can negotiate the same version before resubscribing
-            backendVersionRequest = new BackendSession.VersionRequest(clientName, protocolVersion);
+            backendVersionRequest = new BackendSession.VersionRequest(clientName, backendRequest);
             if(backendVersions != null && !backendVersions.isEmpty()) {
-                backendVersion = new Version(backendVersions.getLast());
+                Version backendVersion = new Version(backendVersions.getLast());
+                if(backendVersion.compareTo(version) < 0) {
+                    version = backendVersion;
+                }
             }
         }
 
-        Version version = backendVersion.compareTo(clientVersion) < 0 ? backendVersion : clientVersion;
         if(version.compareTo(MIN_VERSION) < 0) {
             throw new UnsupportedVersionException(version.get());
         }
 
-        this.protocolVersion = version.compareTo(getMaxSupportedVersion()) > 0 ? getMaxSupportedVersion() : version;
+        this.protocolVersion = version;
         return List.of(Frigate.SERVER_NAME + " " + Frigate.SERVER_VERSION, this.protocolVersion.get());
+    }
+
+    /**
+     * The protocol versions a client accepts: a single version, or a [min, max] range.
+     */
+    record VersionRange(Version min, Version max) {
+        static VersionRange of(Object protocolVersion) {
+            List<?> versions = switch(protocolVersion) {
+                case String s -> List.of(s);
+                case List<?> list -> list;
+                case String[] array -> List.of(array);
+                case null, default -> throw new IllegalArgumentException("Invalid protocol_version type: " + protocolVersion);
+            };
+            if(versions.isEmpty()) {
+                throw new IllegalArgumentException("protocol_version cannot be empty");
+            }
+            Version min = new Version(versions.getFirst().toString());
+            return new VersionRange(min, versions.size() > 1 ? new Version(versions.get(1).toString()) : min);
+        }
     }
 
     @JsonRpcMethod("server.banner")

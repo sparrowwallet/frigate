@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sparrowwallet.drongo.Version;
 
 import java.io.*;
 import java.net.InetAddress;
@@ -31,6 +32,8 @@ public class FakeElectrumBackend implements Closeable {
     private final Map<String, String> statuses = new ConcurrentHashMap<>();
     private volatile boolean accepting = true;
     private final Map<String, Long> responseDelays = new ConcurrentHashMap<>();
+    private final List<JsonNode> versionRequests = new CopyOnWriteArrayList<>();
+    private volatile Version maxProtocolVersion = new Version("1.4");
 
     public FakeElectrumBackend() throws IOException {
         serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
@@ -44,6 +47,16 @@ public class FakeElectrumBackend implements Closeable {
     /** Delays responses to the given method, as a slow backend would. */
     public void setResponseDelay(String method, long millis) {
         responseDelays.put(method, millis);
+    }
+
+    /** Sets the highest protocol version server.version negotiates, as a backend supporting newer versions would. */
+    public void setMaxProtocolVersion(String version) {
+        maxProtocolVersion = new Version(version);
+    }
+
+    /** @return the protocol_version parameter of each server.version request received, in order */
+    public List<JsonNode> getVersionRequests() {
+        return versionRequests;
     }
 
     /** While not accepting, new connections are closed as soon as they are accepted, simulating a backend that is down. */
@@ -124,9 +137,21 @@ public class FakeElectrumBackend implements Closeable {
         response.set("id", request.get("id"));
         switch(method) {
             case "server.version" -> {
-                ArrayNode result = response.putArray("result");
-                result.add("FakeElectrumBackend 1.0");
-                result.add("1.4");
+                //negotiates the highest version in the requested range, a single version or [min, max], that this backend supports
+                JsonNode requested = params.path(1);
+                versionRequests.add(requested);
+                Version min = new Version(requested.isArray() ? requested.path(0).asText() : requested.asText());
+                Version max = requested.isArray() && requested.size() > 1 ? new Version(requested.path(1).asText()) : min;
+                Version negotiated = max.compareTo(maxProtocolVersion) > 0 ? maxProtocolVersion : max;
+                if(negotiated.compareTo(min) < 0) {
+                    ObjectNode error = response.putObject("error");
+                    error.put("code", 1);
+                    error.put("message", "unsupported protocol version");
+                } else {
+                    ArrayNode result = response.putArray("result");
+                    result.add("FakeElectrumBackend 1.0");
+                    result.add(negotiated.get());
+                }
             }
             case "blockchain.scripthash.subscribe" -> {
                 String scriptHash = params.path(0).asText();
