@@ -404,33 +404,33 @@ The behaviour can be configured in the Frigate configuration file (see `dbThread
 The following results were produced by the included `benchmark.py` script scanning mainnet to block height 914,000.
 Note that a mainnet database indexing from height 800,000 is required to run the benchmark.
 
-M1 MacBook Pro (10 CPUs):
+MacBook M5 Max (18 CPUs):
 
 | | Blocks | Start | End | Transactions | Time | Transactions/sec |
 |---|--------|-------|-----|--------------|------|------------------|
-| 2 hours | 12 | 913988 | 914000 | 8,207 | 244ms | 33,608 |
-| 1 day | 144 | 913856 | 914000 | 127,804 | 2s 681ms | 47,675 |
-| 1 week | 1008 | 912992 | 914000 | 751,769 | 3s 600ms | 208,843 |
-| 2 weeks | 2016 | 911984 | 914000 | 1,709,358 | 11s 128ms | 153,602 |
-| 1 month | 4320 | 909680 | 914000 | 4,240,572 | 19s 958ms | 212,470 |
-| 3 months | 12960 | 901040 | 914000 | 13,558,435 | 52s 720ms | 257,179 |
-| 6 months | 25920 | 888080 | 914000 | 26,103,759 | 1m 34s | 274,804 |
-| 1 year | 52560 | 861440 | 914000 | 59,578,156 | 3m 28s | 286,404 |
-| 2 years | 105120 | 808880 | 914000 | 132,994,804 | 7m 47s | 284,342 |
+| 2 hours | 12 | 913988 | 914000 | 8,207 | 119ms | 69,132 |
+| 1 day | 144 | 913856 | 914000 | 127,804 | 1s 322ms | 96,647 |
+| 1 week | 1008 | 912992 | 914000 | 751,769 | 1s 936ms | 388,304 |
+| 2 weeks | 2016 | 911984 | 914000 | 1,709,358 | 2s 178ms | 784,765 |
+| 1 month | 4320 | 909680 | 914000 | 4,240,572 | 4s 648ms | 912,286 |
+| 3 months | 12960 | 901040 | 914000 | 13,558,435 | 17s 895ms | 757,669 |
+| 6 months | 25920 | 888080 | 914000 | 26,103,759 | 29s 824ms | 875,262 |
+| 1 year | 52560 | 861440 | 914000 | 59,578,156 | 1m 2s | 959,622 |
+| 2 years | 105120 | 808880 | 914000 | 132,994,804 | 2m 19s | 954,929 |
 
 Intel Core Ultra 9 285K (24 CPUs):
 
 | | Blocks | Start | End | Transactions | Time | Transactions/sec |
 |---|--------|-------|-----|--------------|------|------------------|
-| 2 hours | 12 | 913988 | 914000 | 8,207 | 256ms | 32,121 |
-| 1 day | 144 | 913856 | 914000 | 127,804 | 1s 591ms | 80,308 |
-| 1 week | 1008 | 912992 | 914000 | 751,769 | 3s 19ms | 249,026 |
-| 2 weeks | 2016 | 911984 | 914000 | 1,709,358 | 4s 474ms | 382,106 |
-| 1 month | 4320 | 909680 | 914000 | 4,240,572 | 11s 7ms | 385,252 |
-| 3 months | 12960 | 901040 | 914000 | 13,558,435 | 27s 605ms | 491,151 |
-| 6 months | 25920 | 888080 | 914000 | 26,103,759 | 48s 910ms | 533,711 |
-| 1 year | 52560 | 861440 | 914000 | 59,578,156 | 1m 44s | 569,123 |
-| 2 years | 105120 | 808880 | 914000 | 132,994,804 | 3m 50s | 576,610 |
+| 2 hours | 12 | 913988 | 914000 | 8,207 | 215ms | 38,141 |
+| 1 day | 144 | 913856 | 914000 | 127,804 | 1s 443ms | 88,558 |
+| 1 week | 1008 | 912992 | 914000 | 751,769 | 2s 748ms | 273,605 |
+| 2 weeks | 2016 | 911984 | 914000 | 1,709,358 | 4s 502ms | 379,717 |
+| 1 month | 4320 | 909680 | 914000 | 4,240,572 | 10s 23ms | 423,096 |
+| 3 months | 12960 | 901040 | 914000 | 13,558,435 | 26s 516ms | 511,330 |
+| 6 months | 25920 | 888080 | 914000 | 26,103,759 | 45s 39ms | 579,582 |
+| 1 year | 52560 | 861440 | 914000 | 59,578,156 | 1m 37s | 608,267 |
+| 2 years | 105120 | 808880 | 914000 | 132,994,804 | 3m 29s | 635,405 |
 
 Higher performance on the longer periods is possible by increasing the number of CPUs.
 Multiple clients conducting simultaneous scans slows each scan linearly, since a single scan already saturates all available CPU cores.
@@ -439,19 +439,19 @@ Multiple clients conducting simultaneous scans slows each scan linearly, since a
 
 GPU performance is significantly higher, and as a result is the default compute backend for historical scans.
 
-MacBook M1 Pro (Metal GPU backend):
+MacBook M5 Max (Metal GPU backend):
 
 | | Blocks | Start | End | Transactions | Time | Transactions/sec |
 |---|--------|-------|-----|--------------|------|------------------|
-| 2 hours | 12 | 913988 | 914000 | 8,207 | 32ms | 259,509 |
-| 1 day | 144 | 913856 | 914000 | 127,804 | 240ms | 532,614 |
-| 1 week | 1008 | 912992 | 914000 | 751,769 | 1s 313ms | 572,722 |
-| 2 weeks | 2016 | 911984 | 914000 | 1,709,358 | 3s 91ms | 552,981 |
-| 1 month | 4320 | 909680 | 914000 | 4,240,572 | 7s 458ms | 568,576 |
-| 3 months | 12960 | 901040 | 914000 | 13,558,435 | 23s 288ms | 582,196 |
-| 6 months | 25920 | 888080 | 914000 | 26,103,759 | 44s 575ms | 585,617 |
-| 1 year | 52560 | 861440 | 914000 | 59,578,156 | 1m 41s | 586,138 |
-| 2 years | 105120 | 808880 | 914000 | 132,994,804 | 3m 47s | 584,231 |
+| 2 hours | 12 | 913988 | 914000 | 8,207 | 15ms | 549,752 |
+| 1 day | 144 | 913856 | 914000 | 127,804 | 54ms | 2,359,838 |
+| 1 week | 1008 | 912992 | 914000 | 751,769 | 232ms | 3,238,371 |
+| 2 weeks | 2016 | 911984 | 914000 | 1,709,358 | 506ms | 3,376,651 |
+| 1 month | 4320 | 909680 | 914000 | 4,240,572 | 1s 212ms | 3,497,959 |
+| 3 months | 12960 | 901040 | 914000 | 13,558,435 | 3s 836ms | 3,534,313 |
+| 6 months | 25920 | 888080 | 914000 | 26,103,759 | 7s 150ms | 3,651,085 |
+| 1 year | 52560 | 861440 | 914000 | 59,578,156 | 16s 332ms | 3,647,902 |
+| 2 years | 105120 | 808880 | 914000 | 132,994,804 | 38s 2ms | 3,499,656 |
 
 NVIDIA RTX 5080 (CUDA backend):
 
