@@ -620,8 +620,8 @@ public class BitcoindClient {
     }
 
     public void stop() {
-        timer.cancel();
         stopped = true;
+        timer.cancel();
         if(zmqSubscriberThread != null) {
             zmqSubscriberThread.interrupt();
         }
@@ -708,6 +708,7 @@ public class BitcoindClient {
 
             if(stopped) {
                 timer.cancel();
+                return;
             }
 
             try {

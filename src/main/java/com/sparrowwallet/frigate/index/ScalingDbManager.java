@@ -16,7 +16,7 @@ public class ScalingDbManager extends AbstractDbManager {
     private Connection writeConnection;
     private final List<DuckDBReadPool> readPools = new ArrayList<>();
     private final AtomicInteger index = new AtomicInteger(0);
-    private boolean shutdown = false;
+    private volatile boolean shutdown = false;
 
     public ScalingDbManager(String readWriteUrl, List<String> readOnlyUrls) {
         super();
@@ -50,7 +50,7 @@ public class ScalingDbManager extends AbstractDbManager {
     }
 
     @Override
-    public <T> T executeWrite(WriteOperation<T> operation) throws SQLException {
+    public synchronized <T> T executeWrite(WriteOperation<T> operation) throws SQLException {
         if(shutdown) {
             throw new SQLException("Connection manager is shutting down");
         }
@@ -60,7 +60,7 @@ public class ScalingDbManager extends AbstractDbManager {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         shutdown = true;
 
         try {

@@ -16,7 +16,7 @@ public class MemoryDbManager implements DbManager {
     private final static Logger log = LoggerFactory.getLogger(MemoryDbManager.class);
 
     private Connection connection;
-    private boolean shutdown = false;
+    private volatile boolean shutdown = false;
 
     @Override
     public synchronized <T> T executeRead(ReadOperation<T> operation) throws SQLException {
@@ -39,7 +39,7 @@ public class MemoryDbManager implements DbManager {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         shutdown = true;
 
         try {

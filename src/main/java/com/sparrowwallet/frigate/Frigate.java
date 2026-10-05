@@ -105,14 +105,15 @@ public class Frigate {
         if(certificateReloader != null) {
             certificateReloader.close();
         }
+        //then bitcoind, so its poll timer and ZMQ consumer stop writing to the indexes before they close
+        if(bitcoindClient != null) {
+            bitcoindClient.stop();
+        }
         if(blocksIndex != null) {
             blocksIndex.close();
         }
         if(mempoolIndex != null) {
             mempoolIndex.close();
-        }
-        if(bitcoindClient != null) {
-            bitcoindClient.stop();
         }
         if(indexQuerier != null) {
             indexQuerier.close();
