@@ -64,6 +64,8 @@ def scan(host, port, start_range):
     sock.sendall(req)
 
     buf = b""
+    matches = 0
+    progress = 0.0
     while True:
         data = sock.recv(8192)
         if not data:
@@ -72,17 +74,22 @@ def scan(host, port, start_range):
         while b"\n" in buf:
             line, buf = buf.split(b"\n", 1)
             msg = json.loads(line)
-            if "params" in msg and msg["params"].get("progress", 0) >= 1.0:
-                elapsed = time.monotonic() - t0
-                sock.close()
-                return elapsed, len(msg["params"].get("history", []))
+            if "params" in msg:
+                params = msg["params"]
+                matches += len(params.get("history", []))
+                progress = params.get("progress", progress)
+                if progress >= 1.0:
+                    elapsed = time.monotonic() - t0
+                    sock.close()
+                    return elapsed, matches
             if msg.get("id") == 2 and "error" in msg:
                 sock.close()
                 raise RuntimeError(msg["error"].get("message", str(msg["error"])))
 
-    elapsed = time.monotonic() - t0
+    # A server that dies mid-scan closes the socket. Treating that as a completed scan
+    # records a short, plausible-looking time, so it must be an error.
     sock.close()
-    return elapsed, 0
+    raise RuntimeError(f"server closed the connection before the scan completed (progress {progress:.0%})")
 
 
 def format_time(seconds):
@@ -117,6 +124,7 @@ def run_benchmarks(host, port, end_height, markdown, clients, max_periods=0):
     print(" done.\n")
 
     results = []
+    prev_count = 0
     for desc, short, blocks, start, height_range, txns in periods:
         sys.stdout.write(f"  Scanning {short}...")
         sys.stdout.flush()
@@ -127,9 +135,18 @@ def run_benchmarks(host, port, end_height, markdown, clients, max_periods=0):
                 futures = [pool.submit(scan, host, port, height_range) for _ in range(clients)]
                 thread_results = [f.result() for f in futures]
             elapsed = max(e for e, c in thread_results)
+            counts = {c for e, c in thread_results}
+            if len(counts) > 1:
+                raise RuntimeError(f"clients disagree on match count for {short}: {sorted(counts)}")
+            count = counts.pop()
+        # Each period contains every shorter one, so matches can only grow. Fewer matches
+        # than the previous period means a scan returned an incomplete result.
+        if count < prev_count:
+            raise RuntimeError(f"{short} returned {count} matches, fewer than the {prev_count} of the previous period")
+        prev_count = count
         tps = round(clients * txns / elapsed) if txns and elapsed > 0 else None
         results.append((desc, blocks, start, end_height, txns, elapsed, tps))
-        sys.stdout.write(f" {format_time(elapsed)}\n")
+        sys.stdout.write(f" {format_time(elapsed)} ({count} matches)\n")
         sys.stdout.flush()
 
     print()
