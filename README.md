@@ -680,47 +680,50 @@ blockchain.silentpayments.subscribe(subscription, progress, history)
 
 **Body**
 
-A dictionary with the following key/value pairs:
+As with other Electrum notifications, `params` is a positional array `[subscription, progress, history]`:
 
-1. A `subscription` JSON object literal containing details of the current subscription:
+1. `subscription`: A JSON object literal containing details of the current subscription:
 - _address_: The silent payment address that has been subscribed to.
 - _labels_: An array of the labels that are subscribed to (must include `0`).
 - _start_height_: The block height from which the subscription scan was started.
 
-2. A `progress` key/value pair indicating the progress of a historical scan:
-- _progress_: A floating point value between `0.0` and `1.0`. Will be `1.0` for all current (up to date) results.
+2. `progress`: A floating point value between `0.0` and `1.0` indicating the progress of a historical scan. Will be `1.0` for all current (up to date) results.
 
-3. A `history` array of transactions. Confirmed transactions are listed in order by height, followed by mempool transactions in arbitary order. Each transaction is a dictionary with the following keys:
+3. `history`: An array of transactions. Confirmed transactions are listed in order by height, followed by mempool transactions in arbitrary order. Each transaction is a dictionary with the following keys:
 - _height_: The integer height of the block the transaction was confirmed in. For mempool transactions, `0` should be used.
 - _tx_hash_: The transaction hash in hexadecimal.
 - _tweak_key_: The tweak key (`input_hash*A`) for the transaction in compressed format.
 
-**Result Example**
+**Notification Example**
 
 ```json
 {
-  "subscription": {
-    "address": "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
-    "labels": [0],
-    "start_height": 882000
-  },
-  "progress": 1.0,
-  "history": [
+  "jsonrpc": "2.0",
+  "method": "blockchain.silentpayments.subscribe",
+  "params": [
     {
-      "height": 890004,
-      "tx_hash": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412",
-      "tweak_key": "0314bec14463d6c0181083d607fecfba67bb83f95915f6f247975ec566d5642ee8"
+      "address": "sp1qqgste7k9hx0qftg6qmwlkqtwuy6cycyavzmzj85c6qdfhjdpdjtdgqjuexzk6murw56suy3e0rd2cgqvycxttddwsvgxe2usfpxumr70xc9pkqwv",
+      "labels": [0],
+      "start_height": 882000
     },
-    {
-      "height": 905008,
-      "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403",
-      "tweak_key": "024ac253c216532e961988e2a8ce266a447c894c781e52ef6cee902361db960004"
-    },
-    {
-      "height": 0,
-      "tx_hash": "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16",
-      "tweak_key": "03aeea547819c08413974e2ab2b12212e007166bb2058f88b009e082b9b4914a58"
-    }
+    1.0,
+    [
+      {
+        "height": 890004,
+        "tx_hash": "acc3758bd2a26f869fcc67d48ff30b96464d476bca82c1cd6656e7d506816412",
+        "tweak_key": "0314bec14463d6c0181083d607fecfba67bb83f95915f6f247975ec566d5642ee8"
+      },
+      {
+        "height": 905008,
+        "tx_hash": "f3e1bf48975b8d6060a9de8884296abb80be618dc00ae3cb2f6cee3085e09403",
+        "tweak_key": "024ac253c216532e961988e2a8ce266a447c894c781e52ef6cee902361db960004"
+      },
+      {
+        "height": 0,
+        "tx_hash": "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16",
+        "tweak_key": "03aeea547819c08413974e2ab2b12212e007166bb2058f88b009e082b9b4914a58"
+      }
+    ]
   ]
 }
 ```

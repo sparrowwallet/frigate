@@ -2,7 +2,6 @@ package com.sparrowwallet.frigate.electrum;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.eventbus.Subscribe;
 import com.sparrowwallet.frigate.cli.FrigateCli;
@@ -19,10 +18,10 @@ public class ElectrumNotificationServiceTest {
     private static final String SCRIPT_HASH = "a0".repeat(32);
 
     private final List<String> sent = new ArrayList<>();
-    private final ElectrumNotificationService service = new JsonRpcClient(request -> {
+    private final ElectrumNotificationService service = new ElectrumNotificationService(request -> {
         sent.add(request);
-        return "{\"result\":{},\"error\":null,\"id\":1}";
-    }).onDemand(ElectrumNotificationService.class);
+        return null;
+    });
 
     private JsonNode params() throws Exception {
         return MAPPER.readTree(sent.getLast()).path("params");
@@ -32,6 +31,14 @@ public class ElectrumNotificationServiceTest {
     public void scriptHashNotificationIsPositional() throws Exception {
         service.notifyScriptHash(SCRIPT_HASH, "01".repeat(32));
         assertEquals(MAPPER.readTree("[\"" + SCRIPT_HASH + "\",\"" + "01".repeat(32) + "\"]"), params());
+    }
+
+    @Test
+    public void notificationsCarryNoId() throws Exception {
+        service.notifyHeaders(new ElectrumBlockHeader(915000, "00ff"));
+        JsonNode notification = MAPPER.readTree(sent.getLast());
+        assertEquals("blockchain.headers.subscribe", notification.path("method").asText());
+        assertFalse(notification.has("id"));
     }
 
     @Test

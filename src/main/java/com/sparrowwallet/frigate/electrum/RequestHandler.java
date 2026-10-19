@@ -1,6 +1,5 @@
 package com.sparrowwallet.frigate.electrum;
 
-import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.eventbus.Subscribe;
 import com.sparrowwallet.drongo.protocol.Sha256Hash;
@@ -98,7 +97,10 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                     new BackendSubscriptionService(scriptHashSubscriptions, this::notifyScriptHash), requestTimeoutMillis, backendTls);
         }
         this.electrumServerService = new ElectrumServerService(bitcoindClient, this, indexQuerier, backendTransport);
-        this.notificationService = new JsonRpcClient(new ElectrumNotificationTransport(this)).onDemand(ElectrumNotificationService.class);
+        this.notificationService = new ElectrumNotificationService(request -> {
+            writeLine(request);
+            return null;
+        });
         this.notifier = new AsyncNotifier("ElectrumNotify-" + System.identityHashCode(this), Config.get().getLimits().getNotificationQueueSize(), scriptHashSubscriptions,
                 notificationService::notifyScriptHash, this::disconnectSlowConsumer);
         if(backendTransport != null) {

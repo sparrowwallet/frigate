@@ -1,27 +1,34 @@
 package com.sparrowwallet.frigate.electrum;
 
-import com.github.arteam.simplejsonrpc.client.JsonRpcParams;
-import com.github.arteam.simplejsonrpc.client.ParamsType;
-import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcMethod;
-import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcOptional;
-import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcParam;
-import com.github.arteam.simplejsonrpc.core.annotation.JsonRpcService;
+import com.github.arteam.simplejsonrpc.client.JsonRpcClient;
+import com.github.arteam.simplejsonrpc.client.Transport;
 
 import java.util.List;
 
 /**
- * Notifications sent to clients. Their params are positional, as the Electrum protocol specifies and Electrum servers send them,
- * rather than named, the JSON-RPC client library's default; a null status is sent explicitly as null.
+ * Notifications sent to clients. They carry no id, as JSON-RPC notifications do, and their params are positional, as the Electrum protocol specifies
+ * and Electrum servers send them; a null status is sent explicitly as null.
  */
-@JsonRpcService
-@JsonRpcParams(ParamsType.ARRAY)
-public interface ElectrumNotificationService {
-    @JsonRpcMethod("blockchain.headers.subscribe")
-    void notifyHeaders(@JsonRpcParam("header") ElectrumBlockHeader electrumBlockHeader);
+public class ElectrumNotificationService {
+    private final JsonRpcClient jsonRpcClient;
 
-    @JsonRpcMethod("blockchain.scripthash.subscribe")
-    void notifyScriptHash(@JsonRpcParam("scripthash") String scriptHash, @JsonRpcOptional @JsonRpcParam("status") String status);
+    public ElectrumNotificationService(Transport transport) {
+        this.jsonRpcClient = new JsonRpcClient(transport);
+    }
 
-    @JsonRpcMethod("blockchain.silentpayments.subscribe")
-    void notifySilentPayments(@JsonRpcParam("subscription") SilentPaymentsSubscription silentPaymentsSubscription, @JsonRpcParam("progress") double progress, @JsonRpcParam("history") List<SilentPaymentsTxEntry> history);
+    public void notifyHeaders(ElectrumBlockHeader electrumBlockHeader) {
+        notify("blockchain.headers.subscribe", electrumBlockHeader);
+    }
+
+    public void notifyScriptHash(String scriptHash, String status) {
+        notify("blockchain.scripthash.subscribe", scriptHash, status);
+    }
+
+    public void notifySilentPayments(SilentPaymentsSubscription silentPaymentsSubscription, double progress, List<SilentPaymentsTxEntry> history) {
+        notify("blockchain.silentpayments.subscribe", silentPaymentsSubscription, progress, history);
+    }
+
+    private void notify(String method, Object... params) {
+        jsonRpcClient.createNotification().method(method).params(params).execute();
+    }
 }
