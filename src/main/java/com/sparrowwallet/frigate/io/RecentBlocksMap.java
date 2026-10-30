@@ -2,15 +2,22 @@ package com.sparrowwallet.frigate.io;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonParseException;
 import com.google.gson.reflect.TypeToken;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.lang.reflect.Type;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.Collections;
 import java.util.Map;
 import java.util.TreeMap;
 
 public class RecentBlocksMap {
+    private static final Logger log = LoggerFactory.getLogger(RecentBlocksMap.class);
     private static final String RECENT_BLOCKS_FILENAME = "recentblocks";
 
     private final TreeMap<Integer, String> data;
@@ -74,8 +81,8 @@ public class RecentBlocksMap {
                     }
                 }
             }
-        } catch(IOException e) {
-            // Ignore and start with empty map
+        } catch(IOException | JsonParseException e) {
+            log.warn("Could not read recent blocks file, starting with an empty map: " + e.getMessage());
         }
     }
 
@@ -83,13 +90,21 @@ public class RecentBlocksMap {
         Gson gson = getGson();
         try {
             File recentBlocksFile = getRecentBlocksFile();
-            if(!recentBlocksFile.exists()) {
-                Storage.createOwnerOnlyFile(recentBlocksFile);
+            File tempFile = new File(recentBlocksFile.getParentFile(), RECENT_BLOCKS_FILENAME + ".tmp");
+            if(!tempFile.exists()) {
+                Storage.createOwnerOnlyFile(tempFile);
             }
 
-            try(Writer writer = new FileWriter(recentBlocksFile)) {
+            try(Writer writer = new FileWriter(tempFile)) {
                 gson.toJson(this.data, writer);
                 writer.flush();
+            }
+
+            //replace via rename so a crash mid-write can't leave a truncated file behind
+            try {
+                Files.move(tempFile.toPath(), recentBlocksFile.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch(AtomicMoveNotSupportedException e) {
+                Files.move(tempFile.toPath(), recentBlocksFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         } catch(IOException e) {
             //Ignore
