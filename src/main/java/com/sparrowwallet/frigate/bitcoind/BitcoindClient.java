@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 public class BitcoindClient {
     private static final Logger log = LoggerFactory.getLogger(BitcoindClient.class);
@@ -49,6 +50,8 @@ public class BitcoindClient {
     private static final long ZMQ_MEMPOOL_DIFF_INTERVAL_MS = 30_000;
     private static final long POLL_MEMPOOL_DIFF_INTERVAL_MS = 5_000;
     private static final long ZMQ_STALENESS_THRESHOLD_MS = 60_000;
+    private static final int RPC_RETRY_ATTEMPTS = 5;
+    private static final long RPC_RETRY_DELAY_MS = 5_000;
 
     private final BitcoindTransport bitcoindTransport;
     private final JsonRpcClient jsonRpcClient;
@@ -251,12 +254,12 @@ public class BitcoindClient {
 
     private void indexBlockVerbose(int height, HexFormat hexFormat) {
         BitcoindClientService bitcoindService = getBitcoindService();
-        String blockHash = bitcoindService.getBlockHash(height);
+        String blockHash = withRetry(() -> bitcoindService.getBlockHash(height));
         if(height > tip.height() - MAX_REORG_DEPTH) {
             recentBlocksMap.put(height, blockHash);
         }
 
-        VerboseBlock vb = bitcoindService.getVerboseBlock(blockHash, 3);
+        VerboseBlock vb = withRetry(() -> bitcoindService.getVerboseBlock(blockHash, 3));
 
         Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
         for(VerboseBlock.VerboseTransaction vtx : vb.tx()) {
@@ -310,11 +313,11 @@ public class BitcoindClient {
 
     private void indexBlockLegacy(int height, HexFormat hexFormat) {
         BitcoindClientService bitcoindService = getBitcoindService();
-        String blockHash = bitcoindService.getBlockHash(height);
+        String blockHash = withRetry(() -> bitcoindService.getBlockHash(height));
         if(height > tip.height() - MAX_REORG_DEPTH) {
             recentBlocksMap.put(height, blockHash);
         }
-        String blockHex = (String)bitcoindService.getBlock(blockHash, 0);
+        String blockHex = withRetry(() -> (String)bitcoindService.getBlock(blockHash, 0));
         Block block = new Block(hexFormat.parseHex(blockHex));
 
         Map<BlockTransaction, byte[]> eligibleTransactions = new LinkedHashMap<>();
@@ -328,7 +331,7 @@ public class BitcoindClient {
             if(!tx.isCoinBase() && containsTaprootOutput(tx)) {
                 for(TransactionInput txInput : tx.getInputs()) {
                     HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
-                    spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
+                    spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex, true));
                 }
 
                 byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
@@ -436,7 +439,7 @@ public class BitcoindClient {
                 BitcoindClientService bitcoindService = getBitcoindService();
                 for(TransactionInput txInput : tx.getInputs()) {
                     HashIndex hashIndex = new HashIndex(txInput.getOutpoint().getHash(), txInput.getOutpoint().getIndex());
-                    spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex));
+                    spentScriptPubKeys.put(hashIndex, getScriptPubKey(bitcoindService, hexFormat, hashIndex, false));
                 }
 
                 byte[] tweak = SilentPaymentUtils.getTweak(tx, spentScriptPubKeys, false);
@@ -664,11 +667,43 @@ public class BitcoindClient {
         Frigate.getEventBus().post(currentTip);
     }
 
-    private Script getScriptPubKey(BitcoindClientService bitcoindClientService, HexFormat hexFormat, HashIndex hashIndex) {
+    /**
+     * Retries a Bitcoin Core request that fails with an I/O error (the RPC client wraps these in IllegalStateException), so a brief
+     * outage such as a restarting RPC proxy doesn't abort indexing. Errors returned by Bitcoin Core itself are not retried.
+     */
+    private <T> T withRetry(Supplier<T> request) {
+        for(int attempt = 1; ; attempt++) {
+            try {
+                return request.get();
+            } catch(IllegalStateException e) {
+                if(attempt == RPC_RETRY_ATTEMPTS || stopped) {
+                    throw e;
+                }
+
+                log.warn("Bitcoin Core request failed (" + (e.getCause() != null ? e.getCause().getMessage() : e.getMessage()) + "), retrying");
+                try {
+                    Thread.sleep(RPC_RETRY_DELAY_MS);
+                } catch(InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+
+                if(stopped) {
+                    throw e;
+                }
+            }
+        }
+    }
+
+    /**
+     * @param retry whether to retry I/O errors - only block indexing does, since the mempool diff already retries a failed transaction later
+     */
+    private Script getScriptPubKey(BitcoindClientService bitcoindClientService, HexFormat hexFormat, HashIndex hashIndex, boolean retry) {
         Script scriptPubKey = getFromScriptPubKeyCache(hashIndex);
         if(scriptPubKey == null) {
             try {
-                String txHex = (String)bitcoindClientService.getRawTransaction(hashIndex.getHash().toString(), false);
+                Supplier<String> fetch = () -> (String)bitcoindClientService.getRawTransaction(hashIndex.getHash().toString(), false);
+                String txHex = retry ? withRetry(fetch) : fetch.get();
                 Transaction tx = new Transaction(hexFormat.parseHex(txHex));
                 TransactionOutput txOutput = tx.getOutputs().get((int)hashIndex.getIndex());
                 addtoScriptPubKeyCache(hashIndex.getHash(), (int)hashIndex.getIndex(), txOutput.getScriptBytes());

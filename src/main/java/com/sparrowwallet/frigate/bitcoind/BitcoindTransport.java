@@ -87,6 +87,10 @@ public class BitcoindTransport implements Transport {
         if(statusCode == 401) {
             throw new IOException((cookieFile == null ? "User/pass" : "Cookie file") + " authentication failed");
         }
+        //Bitcoin Core only sends JSON-RPC bodies with these codes; anything else (a proxy's 502, bitcoind's plain text 503) can't be parsed
+        if(statusCode != 200 && statusCode != 400 && statusCode != 404 && statusCode != 500) {
+            throw new IOException("HTTP " + statusCode + " " + connection.getResponseMessage());
+        }
         InputStream inputStream = connection.getErrorStream() == null ? connection.getInputStream() : connection.getErrorStream();
 
         StringBuilder res = new StringBuilder();
