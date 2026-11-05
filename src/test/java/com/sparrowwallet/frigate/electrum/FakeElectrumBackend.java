@@ -34,6 +34,7 @@ public class FakeElectrumBackend implements Closeable {
     private final Map<String, Long> responseDelays = new ConcurrentHashMap<>();
     private final List<JsonNode> versionRequests = new CopyOnWriteArrayList<>();
     private volatile Version maxProtocolVersion = new Version("1.4");
+    private volatile int historySize;
 
     public FakeElectrumBackend() throws IOException {
         serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
@@ -47,6 +48,11 @@ public class FakeElectrumBackend implements Closeable {
     /** Delays responses to the given method, as a slow backend would. */
     public void setResponseDelay(String method, long millis) {
         responseDelays.put(method, millis);
+    }
+
+    /** Sets the number of entries returned for every get_history, as for a busy address. */
+    public void setHistorySize(int historySize) {
+        this.historySize = historySize;
     }
 
     /** Sets the highest protocol version server.version negotiates, as a backend supporting newer versions would. */
@@ -159,7 +165,14 @@ public class FakeElectrumBackend implements Closeable {
                 response.put("result", statuses.get(scriptHash));
             }
             case "blockchain.scripthash.unsubscribe" -> response.put("result", connection.subscriptions.remove(params.path(0).asText()));
-            case "blockchain.scripthash.get_history" -> response.putArray("result");
+            case "blockchain.scripthash.get_history" -> {
+                ArrayNode result = response.putArray("result");
+                for(int i = 0; i < historySize; i++) {
+                    ObjectNode entry = result.addObject();
+                    entry.put("height", 800_000 + i);
+                    entry.put("tx_hash", String.format("%064x", i));
+                }
+            }
             default -> response.putNull("result");
         }
         return response.toString();

@@ -825,6 +825,7 @@ public class Config {
         public static final int DEFAULT_MAX_CONNECTIONS_PER_IP = 12;
         public static final int DEFAULT_MAX_REQUEST_BYTES = 1_000_000;
         public static final int DEFAULT_MAX_BATCH_SIZE = 345;
+        public static final int DEFAULT_MAX_RESPONSE_BYTES = 8_000_000;
         public static final int DEFAULT_SESSION_TIMEOUT_SECONDS = 600;
         public static final int DEFAULT_MAX_SUBSCRIPTIONS_PER_IP = 75_000;
         public static final long DEFAULT_MAX_SUBSCRIPTIONS = 10_000_000;
@@ -837,6 +838,7 @@ public class Config {
         private Integer maxConnectionsPerIp;
         private Integer maxRequestBytes;
         private Integer maxBatchSize;
+        private Integer maxResponseBytes;
         private Integer sessionTimeoutSeconds;
         private Integer maxSubscriptionsPerIp;
         private Long maxSubscriptions;
@@ -879,6 +881,14 @@ public class Config {
 
         public void setMaxBatchSize(Integer maxBatchSize) {
             this.maxBatchSize = maxBatchSize;
+        }
+
+        public int getMaxResponseBytes() {
+            return positiveOrDefault(maxResponseBytes, DEFAULT_MAX_RESPONSE_BYTES);
+        }
+
+        public void setMaxResponseBytes(Integer maxResponseBytes) {
+            this.maxResponseBytes = maxResponseBytes;
         }
 
         public int getSessionTimeoutSeconds() {

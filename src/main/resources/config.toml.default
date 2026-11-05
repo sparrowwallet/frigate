@@ -49,6 +49,7 @@ connect = true
 # maxConnectionsPerIp = 12             # per client IP (IPv6: per /64)
 # maxRequestBytes = 1000000            # max JSON-RPC line length; oversized requests disconnect
 # maxBatchSize = 345                   # max requests per JSON-RPC batch array
+# maxResponseBytes = 8000000           # batch requests past this much response are answered with an error, to be retried singly
 # sessionTimeoutSeconds = 600          # idle disconnect; Electrum clients ping every ~60s
 # maxSubscriptionsPerIp = 75000        # scripthash subscriptions per client IP
 # maxSubscriptions = 10000000          # global scripthash subscription cap
@@ -56,7 +57,7 @@ connect = true
 #                                      # raise for clients on slow links receiving very large silent payments scans
 # silentPaymentsSubscribeBurst = 10              # silent payments subscribes a session may make at once
 # silentPaymentsSubscribeIntervalSeconds = 10    # then one per interval; subscribes beyond the burst are delayed, never rejected
-# excludedSubnets = ["127.0.0.1/32", "::1/128"]   # clients exempt from per-IP limits, the batch cap and pacing; add your LAN for a home server
+# excludedSubnets = ["127.0.0.1/32", "::1/128"]   # clients exempt from per-IP limits, the batch size cap and pacing; add your LAN for a home server
 
 # [database]
 # url = "jdbc:duckdb:/custom/path/frigate.duckdb"

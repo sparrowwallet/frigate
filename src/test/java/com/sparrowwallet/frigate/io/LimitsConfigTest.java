@@ -21,6 +21,7 @@ public class LimitsConfigTest {
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_CONNECTIONS_PER_IP, limits.getMaxConnectionsPerIp());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_REQUEST_BYTES, limits.getMaxRequestBytes());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_BATCH_SIZE, limits.getMaxBatchSize());
+        assertEquals(Config.LimitsConfig.DEFAULT_MAX_RESPONSE_BYTES, limits.getMaxResponseBytes());
         assertEquals(Config.LimitsConfig.DEFAULT_SESSION_TIMEOUT_SECONDS, limits.getSessionTimeoutSeconds());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_SUBSCRIPTIONS_PER_IP, limits.getMaxSubscriptionsPerIp());
         assertEquals(Config.LimitsConfig.DEFAULT_MAX_SUBSCRIPTIONS, limits.getMaxSubscriptions());
@@ -43,6 +44,7 @@ public class LimitsConfigTest {
                 maxConnectionsPerIp = 3
                 maxRequestBytes = 2000
                 maxBatchSize = 10
+                maxResponseBytes = 5000
                 sessionTimeoutSeconds = 30
                 maxSubscriptionsPerIp = 1500
                 maxSubscriptions = 5000000000
@@ -55,6 +57,7 @@ public class LimitsConfigTest {
         assertEquals(3, limits.getMaxConnectionsPerIp());
         assertEquals(2000, limits.getMaxRequestBytes());
         assertEquals(10, limits.getMaxBatchSize());
+        assertEquals(5000, limits.getMaxResponseBytes());
         assertEquals(30, limits.getSessionTimeoutSeconds());
         assertEquals(1500, limits.getMaxSubscriptionsPerIp());
         assertEquals(5_000_000_000L, limits.getMaxSubscriptions());
@@ -71,6 +74,7 @@ public class LimitsConfigTest {
                 maxConnectionsPerIp = -1
                 maxRequestBytes = 0
                 maxBatchSize = 0
+                maxResponseBytes = 0
                 sessionTimeoutSeconds = -5
                 maxSubscriptionsPerIp = 0
                 maxSubscriptions = 0

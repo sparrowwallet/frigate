@@ -1,5 +1,9 @@
 package com.sparrowwallet.frigate.electrum;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.arteam.simplejsonrpc.server.JsonRpcServer;
 import com.google.common.eventbus.Subscribe;
 import com.sparrowwallet.drongo.protocol.Sha256Hash;
@@ -48,6 +52,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
     private static final long OVERSIZED_REQUEST_DRAIN_BYTES = 16 * 1024 * 1024;
     private static final String BATCH_TOO_LARGE = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"batch too large\"},\"id\":null}";
     private static final String PARSE_ERROR = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32700,\"message\":\"Parse error\"},\"id\":null}";
+    private static final String INVALID_REQUEST = "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32600,\"message\":\"Invalid Request\"},\"id\":null}";
+    private static final int RESPONSE_TOO_LARGE_CODE = -32006;
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private final Socket clientSocket;
     private final ElectrumServerService electrumServerService;
     private final JsonRpcServer rpcServer = new JsonRpcServer();
@@ -123,6 +130,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             Config.LimitsConfig limits = Config.get().getLimits();
             BoundedLineReader reader = new BoundedLineReader(clientSocket.getInputStream(), limits.getMaxRequestBytes());
             int maxBatchSize = limits.getMaxBatchSize();
+            int maxResponseBytes = limits.getMaxResponseBytes();
             //idle timeout: Electrum clients ping about every minute, so a session silent for this long is dead or abandoned
             clientSocket.setSoTimeout((int)Math.min(TimeUnit.SECONDS.toMillis(limits.getSessionTimeoutSeconds()), Integer.MAX_VALUE));
 
@@ -155,7 +163,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
                 }
 
                 try {
-                    handleRequest(request, maxBatchSize);
+                    handleRequest(request, maxBatchSize, maxResponseBytes);
                 } catch(InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
@@ -184,9 +192,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
 
     /**
      * Handles one request line: rejects it if it is malformed or an oversized batch, and otherwise paces it and writes its response.
-     * Clients from an excluded subnet are exempt from the batch cap and pacing.
+     * Clients from an excluded subnet are exempt from the batch size cap and pacing, but not from the batch response size cap.
      */
-    private void handleRequest(String request, int maxBatchSize) throws InterruptedException {
+    private void handleRequest(String request, int maxBatchSize, int maxResponseBytes) throws InterruptedException {
         //reject requests with null bytes or other control characters
         if(request.indexOf(0) >= 0 || request.chars().anyMatch(c -> c < 32 && c != '\t' && c != '\r' && c != '\n')) {
             log.warn("Rejecting malformed request with control characters");
@@ -194,9 +202,9 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
             return;
         }
 
+        JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, ipKey.exempt() ? Integer.MAX_VALUE : maxBatchSize);
         if(!ipKey.exempt()) {
             //reject an oversized batch without processing any of it; the session continues, as the stream is intact
-            JsonRpcBatch.Summary summary = JsonRpcBatch.summarize(request, maxBatchSize);
             if(summary.items() > maxBatchSize) {
                 log.debug("Rejecting batch of more than " + maxBatchSize + " requests from " + clientSocket.getRemoteSocketAddress());
                 writeLine(BATCH_TOO_LARGE);
@@ -211,7 +219,7 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         }
 
         try {
-            String response = rpcServer.handle(request, electrumServerService);
+            String response = summary.items() > 0 ? handleBatch(request, maxResponseBytes) : rpcServer.handle(request, electrumServerService);
             writeLine(response);
         } finally {
             //statuses held for subscribes in this request can follow the response now it has been written
@@ -220,6 +228,67 @@ public class RequestHandler implements Runnable, SubscriptionStatus, HeadersDisp
         }
 
         runPostResponseTasks();
+    }
+
+    /**
+     * Handles a batch one request at a time, serializing each response as soon as it is made, so that only one result is held as a
+     * JSON tree rather than the whole batch's. Once the responses pass maxResponseBytes, the remaining requests are not processed,
+     * and each is answered with an error so the client can send it again on its own. Pacing tokens taken for skipped silent payments
+     * subscribes are refunded, so sending them again is not paced twice. The size is counted in characters, which for JSON-RPC
+     * responses (ASCII apart from rare text such as a banner) is close to the byte count.
+     * @return the batch response array, or an empty string if every request was a notification, as the JSON-RPC server returns
+     */
+    private String handleBatch(String request, int maxResponseBytes) {
+        JsonNode batch;
+        try {
+            batch = MAPPER.readTree(request);
+        } catch(JsonProcessingException e) {
+            return rpcServer.handle(request, electrumServerService);
+        }
+
+        StringBuilder responses = new StringBuilder("[");
+        int skipped = 0;
+        int skippedSilentPaymentsSubscribes = 0;
+        for(JsonNode item : batch) {
+            String response;
+            if(!item.isObject()) {
+                response = INVALID_REQUEST;
+            } else if(responses.length() > maxResponseBytes) {
+                skipped++;
+                if(JsonRpcBatch.SILENT_PAYMENTS_SUBSCRIBE.equals(item.path("method").asText())) {
+                    skippedSilentPaymentsSubscribes++;
+                }
+                response = item.has("id") ? responseTooLarge(item.get("id")) : "";
+            } else {
+                response = rpcServer.handle(item.toString(), electrumServerService);
+            }
+
+            if(!response.isEmpty()) {
+                if(responses.length() > 1) {
+                    responses.append(',');
+                }
+                responses.append(response);
+            }
+        }
+
+        if(!ipKey.exempt()) {
+            silentPaymentsSubscribeBucket.refund(skippedSilentPaymentsSubscribes);
+        }
+        if(skipped > 0) {
+            log.debug("Skipped " + skipped + " batch requests from " + clientSocket.getRemoteSocketAddress() + " after a response of more than " + maxResponseBytes + " bytes");
+        }
+
+        return responses.length() > 1 ? responses.append(']').toString() : "";
+    }
+
+    private static String responseTooLarge(JsonNode id) {
+        ObjectNode response = MAPPER.createObjectNode();
+        response.put("jsonrpc", "2.0");
+        ObjectNode error = response.putObject("error");
+        error.put("code", RESPONSE_TOO_LARGE_CODE);
+        error.put("message", "response too large");
+        response.set("id", id);
+        return response.toString();
     }
 
     /**

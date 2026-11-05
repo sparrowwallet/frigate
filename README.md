@@ -89,6 +89,7 @@ connect = true
 # maxConnectionsPerIp = 12             # per client IP (IPv6: per /64)
 # maxRequestBytes = 1000000            # max JSON-RPC line length; oversized requests disconnect
 # maxBatchSize = 345                   # max requests per JSON-RPC batch array
+# maxResponseBytes = 8000000           # batch requests past this much response are answered with an error, to be retried singly
 # sessionTimeoutSeconds = 600          # idle disconnect; Electrum clients ping every ~60s
 # maxSubscriptionsPerIp = 75000        # scripthash subscriptions per client IP
 # maxSubscriptions = 10000000          # global scripthash subscription cap
@@ -96,7 +97,7 @@ connect = true
 #                                      # raise for clients on slow links receiving very large silent payments scans
 # silentPaymentsSubscribeBurst = 10              # silent payments subscribes a session may make at once
 # silentPaymentsSubscribeIntervalSeconds = 10    # then one per interval; subscribes beyond the burst are delayed, never rejected
-# excludedSubnets = ["127.0.0.1/32", "::1/128"]   # clients exempt from per-IP limits, the batch cap and pacing; add your LAN for a home server
+# excludedSubnets = ["127.0.0.1/32", "::1/128"]   # clients exempt from per-IP limits, the batch size cap and pacing; add your LAN for a home server
 ```
 
 ### Core
@@ -194,7 +195,7 @@ Both settings are ignored, with a warning, when the backend is not `ssl://`.
 The settings under `[limits]` protect Frigate when it is open to the public, and their defaults are chosen for a public server, following Fulcrum and ElectrumX where they have equivalents.
 
 - **Connections**: at most `maxConnections` sessions in total, and `maxConnectionsPerIp` per client IP address (per /64 prefix for IPv6). A connection over either limit is closed without a response.
-- **Requests**: a request longer than `maxRequestBytes` is answered with a `-32600 request too large` error and the connection is closed. A batch of more than `maxBatchSize` requests is rejected whole with a `-32600 batch too large` error, and the session continues. A request containing control characters is answered with a `-32700` parse error.
+- **Requests**: a request longer than `maxRequestBytes` is answered with a `-32600 request too large` error and the connection is closed. A batch of more than `maxBatchSize` requests is rejected whole with a `-32600 batch too large` error, and the session continues. A batch is answered in order until its response passes `maxResponseBytes`; each request after that is not processed and is answered with a `-32006 response too large` error, so the client can send it again on its own. This applies to all clients, including those in `excludedSubnets`. A request containing control characters is answered with a `-32700` parse error.
 - **Pacing**: each `blockchain.silentpayments.subscribe` starts a scan of the index, so a session may make `silentPaymentsSubscribeBurst` subscribes at once, and then one every `silentPaymentsSubscribeIntervalSeconds`. With the defaults, that is 10 at once and then one every 10 seconds. Subscribes beyond this are delayed rather than rejected. Other requests are not paced.
 - **Subscriptions**: scripthash subscriptions are limited per IP (`maxSubscriptionsPerIp`) and in total (`maxSubscriptions`). A subscription over either limit is refused with a `-32005 subscription limit exceeded` error; subscribing again to a scripthash the session already has is not counted.
 - **Idle sessions**: a session from which nothing is received for `sessionTimeoutSeconds` is closed. Electrum clients ping about every minute, so only dead or abandoned sessions are affected.

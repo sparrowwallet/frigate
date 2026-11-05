@@ -59,6 +59,16 @@ public final class TokenBucket {
         }
     }
 
+    /**
+     * Returns tokens taken for requests that were not processed, up to the capacity, so that sending them again is not paced twice.
+     */
+    public synchronized void refund(long cost) {
+        if(cost > 0) {
+            refill();
+            tokens = Math.min(capacity, tokens + cost);
+        }
+    }
+
     public synchronized double getTokens() {
         refill();
         return tokens;

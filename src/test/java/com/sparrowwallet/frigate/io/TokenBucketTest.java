@@ -38,6 +38,28 @@ public class TokenBucketTest {
     }
 
     @Test
+    public void refundReturnsTokensUpToCapacity() throws Exception {
+        TokenBucket bucket = bucket(10, 10);
+        bucket.acquire(8);
+
+        bucket.refund(5);
+        assertEquals(7, bucket.getTokens(), 1e-9);
+
+        bucket.refund(5);
+        assertEquals(10, bucket.getTokens(), 1e-9);
+    }
+
+    @Test
+    public void refundRepaysDebt() throws Exception {
+        TokenBucket bucket = bucket(10, 10);
+        bucket.acquire(25);
+
+        bucket.refund(10);
+
+        assertEquals(-5, bucket.getTokens(), 1e-9);
+    }
+
+    @Test
     public void waitsForRefillWhenEmpty() throws Exception {
         TokenBucket bucket = bucket(10, 10);
         bucket.acquire(10);

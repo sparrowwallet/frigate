@@ -377,6 +377,63 @@ public class ElectrumSessionIntegrationTest {
     }
 
     @Test
+    public void batchPastResponseLimitAnswersRemainderWithError() throws Exception {
+        //each history response is about 1 KB, so the limit is passed during the third request
+        backend.setHistorySize(10);
+        Config.get().getLimits().setMaxResponseBytes(2500);
+        TestElectrumClient client = connectClient();
+        List<String> scriptHashes = IntStream.range(0, 6).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
+
+        JsonNode responses = client.requestBatch("blockchain.scripthash.get_history", scriptHashes);
+
+        assertEquals(6, responses.size());
+        for(int i = 0; i < responses.size(); i++) {
+            JsonNode response = responses.get(i);
+            if(i < 3) {
+                assertEquals(10, response.path("result").size(), response.toString());
+            } else {
+                assertEquals(-32006, errorCode(response), response.toString());
+                assertEquals("response too large", response.path("error").path("message").asText());
+            }
+            //responses keep the batch order and their request ids
+            assertEquals(responses.get(0).path("id").asInt() + i, response.path("id").asInt());
+        }
+
+        //a skipped request succeeds when sent on its own, and the session continues
+        assertEquals(10, client.request("blockchain.scripthash.get_history", scriptHash(5)).path("result").size());
+    }
+
+    @Test
+    public void excludedClientsAreHeldToTheResponseLimit() throws Exception {
+        Config.get().getLimits().setExcludedSubnets(null);
+        backend.setHistorySize(10);
+        Config.get().getLimits().setMaxResponseBytes(2500);
+        startServer();
+        TestElectrumClient client = connectClient();
+        List<String> scriptHashes = IntStream.range(0, 6).mapToObj(ElectrumSessionIntegrationTest::scriptHash).toList();
+
+        JsonNode responses = client.requestBatch("blockchain.scripthash.get_history", scriptHashes);
+
+        assertEquals(-32006, errorCode(responses.get(5)), responses.get(5).toString());
+    }
+
+    @Test
+    public void batchItemsAreAnsweredAsTheJsonRpcServerWould() throws Exception {
+        TestElectrumClient client = connectClient();
+
+        //a notification gets no response, and an item that is not a request object gets an invalid request error
+        client.sendRaw("[{\"jsonrpc\":\"2.0\",\"method\":\"server.ping\",\"params\":[]},1,[2],{\"jsonrpc\":\"2.0\",\"id\":95,\"method\":\"server.ping\",\"params\":[]}]");
+
+        JsonNode responses = client.pollResponse(5, TimeUnit.SECONDS);
+        assertNotNull(responses);
+        assertEquals(3, responses.size(), responses.toString());
+        assertEquals(-32600, errorCode(responses.get(0)));
+        assertEquals(-32600, errorCode(responses.get(1)));
+        assertEquals(95, responses.get(2).path("id").asInt());
+        assertFalse(responses.get(2).has("error") && !responses.get(2).get("error").isNull(), responses.toString());
+    }
+
+    @Test
     public void requestWithControlCharactersGetsParseError() throws Exception {
         TestElectrumClient client = connectClient();
 

@@ -8,7 +8,7 @@ import java.io.IOException;
 
 public final class JsonRpcBatch {
     private static final JsonFactory JSON_FACTORY = new JsonFactory();
-    private static final String SILENT_PAYMENTS_SUBSCRIBE = "blockchain.silentpayments.subscribe";
+    public static final String SILENT_PAYMENTS_SUBSCRIBE = "blockchain.silentpayments.subscribe";
 
     private JsonRpcBatch() {
     }
