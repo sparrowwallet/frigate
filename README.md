@@ -821,6 +821,8 @@ When updating to the latest HEAD
 
 Please use the [Issues](https://github.com/sparrowwallet/frigate/issues) tab above to report an issue. If possible, look in the frigate.log file in the configuration directory for information helpful in debugging.
 
+Security vulnerabilities should be reported privately rather than as issues — see [SECURITY.md](SECURITY.md).
+
 ## License
 
 Frigate is licensed under the Apache 2 software licence.
