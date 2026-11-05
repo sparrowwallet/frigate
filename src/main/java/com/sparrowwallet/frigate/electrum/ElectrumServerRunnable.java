@@ -187,6 +187,11 @@ public class ElectrumServerRunnable implements Runnable {
         } catch(RuntimeException e) {
             log.error("Error in session for client " + clientSocket.getRemoteSocketAddress(), e);
             closeQuietly(clientSocket);
+        } catch(OutOfMemoryError e) {
+            //the memory the session held is usually unreachable by now, so the server recovers and only this session is closed;
+            //the socket is closed first, as logging may itself run out of memory
+            closeQuietly(clientSocket);
+            log.error("Out of memory in session for client " + clientSocket.getRemoteSocketAddress() + ", closed it", e);
         } finally {
             if(requestHandler != null) {
                 sessions.remove(requestHandler);

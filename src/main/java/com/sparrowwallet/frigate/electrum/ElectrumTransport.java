@@ -305,6 +305,12 @@ public class ElectrumTransport implements Transport, Closeable {
                 log.trace("Connection error while reading", e);
                 lastException = e;
             }
+        } catch(OutOfMemoryError e) {
+            //the cause is recorded before logging, as logging may itself run out of memory
+            if(!closed && current == connection) {
+                lastException = new IOException("out of memory", e);
+            }
+            log.error("Out of memory reading from Electrum server " + electrumServer + ", closing the connection", e);
         } finally {
             //closes the socket too, as a connection can end with its socket still usable, such as after an oversized line
             current.close();
